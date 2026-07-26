@@ -305,8 +305,8 @@ export default function Home() {
         await createUserWithEmailAndPassword(auth, authEmail, authPassword);
         setAuthModalOpen(false);
       }
-    } catch (err: any) {
-      notify(err.message || "Authentication error");
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Authentication error");
     }
   }
 
@@ -314,7 +314,7 @@ export default function Home() {
     try {
       await signInWithPopup(auth, googleProvider);
       setAuthModalOpen(false);
-    } catch (err: any) {
+    } catch {
       notify("Google sign-in error or cancelled");
     }
   }
@@ -1080,7 +1080,7 @@ export default function Home() {
             
             <div style={{ display: "grid", gap: "10px", marginBottom: "20px" }}>
               {travelersList.map((t) => (
-                <div key={t.email} style={{ display: "flex", alignItems: "center", justifyBetween: "space-between", gap: "10px", background: "#f8fafc", padding: "10px", borderRadius: "8px" }}>
+                <div key={t.email} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", background: "#f8fafc", padding: "10px", borderRadius: "8px" }}>
                   <span className={`avatar ${t.bg}`}>{t.avatar}</span>
                   <div style={{ flex: 1 }}>
                     <strong style={{ fontSize: "11px", display: "block" }}>{t.name}</strong>

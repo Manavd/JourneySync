@@ -1,5 +1,28 @@
 // Firebase Authentication & Firestore Service for JourneySync
-// Supports standard Web API & Firebase SDK with seamless local fallback
+// Wraps the real Firebase SDK behind the same interface the app already uses.
+// Config comes from NEXT_PUBLIC_FIREBASE_* env vars (see .env.local.example).
+
+import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  onAuthStateChanged as firebaseOnAuthStateChanged,
+  signInWithEmailAndPassword as firebaseSignInWithEmailAndPassword,
+  createUserWithEmailAndPassword as firebaseCreateUserWithEmailAndPassword,
+  signInWithPopup as firebaseSignInWithPopup,
+  signOut as firebaseSignOut,
+  type Auth,
+  type User as FirebaseAuthUser,
+} from "firebase/auth";
+import {
+  getFirestore,
+  doc as firestoreDoc,
+  setDoc as firestoreSetDoc,
+  getDoc as firestoreGetDoc,
+  type Firestore,
+  type DocumentReference,
+  type SetOptions,
+} from "firebase/firestore";
 
 export type User = {
   uid: string;
@@ -7,110 +30,95 @@ export type User = {
   displayName: string | null;
 };
 
-const STORAGE_KEY_USER = "journeysync_user";
-const STORAGE_KEY_DATA = "journeysync_firestore_data";
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+};
 
-// Auth State Listeners
-type AuthCallback = (user: User | null) => void;
-const authListeners: AuthCallback[] = [];
+const isConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+const CONFIG_ERROR =
+  "Firebase is not configured. Copy .env.local.example to .env.local, fill in your Firebase project credentials, and restart the dev server.";
 
-export function getStoredUser(): User | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_USER);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
+// Only touch the Firebase SDK in the browser: this module is imported by a
+// "use client" component, but that component's initial render still happens
+// server-side, where window/indexedDB aren't available.
+let app: FirebaseApp | undefined;
+let authInstance: Auth | undefined;
+let dbInstance: Firestore | undefined;
+
+if (typeof window !== "undefined") {
+  if (isConfigured) {
+    app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+    authInstance = getAuth(app);
+    dbInstance = getFirestore(app);
+  } else {
+    console.error(CONFIG_ERROR);
   }
 }
 
-export function onAuthStateChanged(_auth: any, callback: AuthCallback) {
-  const user = getStoredUser();
-  callback(user);
-  authListeners.push(callback);
-  return () => {
-    const idx = authListeners.indexOf(callback);
-    if (idx !== -1) authListeners.splice(idx, 1);
+export const auth = authInstance as Auth;
+export const db = dbInstance as Firestore;
+export const googleProvider = new GoogleAuthProvider();
+
+function requireAuth(): Auth {
+  if (!authInstance) throw new Error(CONFIG_ERROR);
+  return authInstance;
+}
+
+function requireDb(): Firestore {
+  if (!dbInstance) throw new Error(CONFIG_ERROR);
+  return dbInstance;
+}
+
+function toUser(firebaseUser: FirebaseAuthUser | null): User | null {
+  if (!firebaseUser) return null;
+  return {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email,
+    displayName: firebaseUser.displayName,
   };
 }
 
-function notifyAuthListeners(user: User | null) {
-  if (typeof window !== "undefined") {
-    if (user) {
-      localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(user));
-    } else {
-      localStorage.removeItem(STORAGE_KEY_USER);
-    }
+export function onAuthStateChanged(_auth: Auth, callback: (user: User | null) => void) {
+  if (!authInstance) {
+    callback(null);
+    return () => {};
   }
-  authListeners.forEach((cb) => cb(user));
+  return firebaseOnAuthStateChanged(authInstance, (firebaseUser) => callback(toUser(firebaseUser)));
 }
 
-export async function signInWithEmailAndPassword(_auth: any, email: string, _pass: string): Promise<User> {
-  const user: User = {
-    uid: "usr_" + Math.random().toString(36).substring(2, 9),
-    email,
-    displayName: email.split("@")[0],
-  };
-  notifyAuthListeners(user);
-  return user;
+export async function signInWithEmailAndPassword(_auth: Auth, email: string, password: string): Promise<User> {
+  const credential = await firebaseSignInWithEmailAndPassword(requireAuth(), email, password);
+  return toUser(credential.user)!;
 }
 
-export async function createUserWithEmailAndPassword(_auth: any, email: string, _pass: string): Promise<User> {
-  const user: User = {
-    uid: "usr_" + Math.random().toString(36).substring(2, 9),
-    email,
-    displayName: email.split("@")[0],
-  };
-  notifyAuthListeners(user);
-  return user;
+export async function createUserWithEmailAndPassword(_auth: Auth, email: string, password: string): Promise<User> {
+  const credential = await firebaseCreateUserWithEmailAndPassword(requireAuth(), email, password);
+  return toUser(credential.user)!;
 }
 
-export async function signInWithPopup(_auth: any, _provider: any): Promise<User> {
-  const user: User = {
-    uid: "usr_google_" + Math.random().toString(36).substring(2, 9),
-    email: "user.google@example.com",
-    displayName: "Google Traveler",
-  };
-  notifyAuthListeners(user);
-  return user;
+export async function signInWithPopup(_auth: Auth, provider: GoogleAuthProvider): Promise<User> {
+  const credential = await firebaseSignInWithPopup(requireAuth(), provider);
+  return toUser(credential.user)!;
 }
 
-export async function signOut(_auth: any) {
-  notifyAuthListeners(null);
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for API-compat with real Firebase's signOut(auth) signature
+export async function signOut(_auth: Auth) {
+  await firebaseSignOut(requireAuth());
 }
 
-// Dummy Export objects matching standard Firebase interface
-export const auth = {};
-export const db = {};
-export const googleProvider = {};
-
-export function doc(_db: any, ...pathSegments: string[]) {
-  return pathSegments.join("/");
+export function doc(_db: Firestore, ...pathSegments: string[]): DocumentReference {
+  return firestoreDoc(requireDb(), pathSegments.join("/"));
 }
 
-export async function setDoc(docPath: string, data: any, _options?: any) {
-  if (typeof window === "undefined") return;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_DATA) || "{}";
-    const store = JSON.parse(raw);
-    store[docPath] = data;
-    localStorage.setItem(STORAGE_KEY_DATA, JSON.stringify(store));
-  } catch (e) {
-    console.error("Firestore local store error:", e);
-  }
+export async function setDoc(docRef: DocumentReference, data: Record<string, unknown>, options?: SetOptions) {
+  await firestoreSetDoc(docRef, data, options ?? {});
 }
 
-export async function getDoc(docPath: string) {
-  if (typeof window === "undefined") return { exists: () => false, data: () => null };
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_DATA) || "{}";
-    const store = JSON.parse(raw);
-    const data = store[docPath];
-    return {
-      exists: () => !!data,
-      data: () => data || null,
-    };
-  } catch {
-    return { exists: () => false, data: () => null };
-  }
+export async function getDoc(docRef: DocumentReference) {
+  return firestoreGetDoc(docRef);
 }
