@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 
 type Day = {
   date: string;
@@ -14,6 +14,8 @@ type Day = {
     status?: string;
   }>;
 };
+
+type Trip = { name: string; route: string; dates: string; travelers: number; days: Day[] };
 
 const days: Day[] = [
   {
@@ -136,16 +138,55 @@ const iconFor = {
 
 export default function Home() {
   const [activeDay, setActiveDay] = useState(0);
+  const [itineraryDays, setItineraryDays] = useState(days);
+  const [tripName, setTripName] = useState("Swiss Escape");
+  const [tripRoute, setTripRoute] = useState("Zürich → Interlaken → Zermatt");
+  const [tripTravelers, setTripTravelers] = useState(4);
   const [activeNav, setActiveNav] = useState("Itinerary");
   const [synced, setSynced] = useState(true);
   const [expenseOpen, setExpenseOpen] = useState(false);
+  const [plannerOpen, setPlannerOpen] = useState<"trip" | "day" | "item" | null>(null);
   const [toast, setToast] = useState("");
 
-  const day = useMemo(() => days[activeDay], [activeDay]);
+  const day = useMemo(() => itineraryDays[activeDay], [activeDay, itineraryDays]);
 
   function notify(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(""), 2400);
+  }
+
+  function createTrip(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const start = String(form.get("start") || "");
+    const date = start ? new Date(`${start}T12:00:00`) : new Date();
+    const firstDay: Day = {
+      date: String(date.getDate()).padStart(2, "0"),
+      short: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date).toUpperCase(),
+      label: String(form.get("firstDay") || "First day"), events: [],
+    };
+    setTripName(String(form.get("name") || "My trip"));
+    setTripRoute(String(form.get("route") || "Choose your route"));
+    setTripTravelers(Number(form.get("travelers") || 1));
+    setItineraryDays([firstDay]); setActiveDay(0); setPlannerOpen(null);
+    notify("New itinerary created. Add anything you want.");
+  }
+
+  function addDay(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const entered = String(form.get("date") || "");
+    const date = entered ? new Date(`${entered}T12:00:00`) : new Date(Date.now() + itineraryDays.length * 86400000);
+    setItineraryDays(current => [...current, { date: String(date.getDate()).padStart(2, "0"), short: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date).toUpperCase(), label: String(form.get("label") || "New day"), events: [] }]);
+    setActiveDay(itineraryDays.length); setPlannerOpen(null); notify("Day added.");
+  }
+
+  function addItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const item: Day["events"][number] = { time: String(form.get("time") || "Any time"), title: String(form.get("title") || "Untitled plan"), meta: String(form.get("details") || "No details yet"), kind: String(form.get("kind") || "activity") as Day["events"][number]["kind"] };
+    setItineraryDays(current => current.map((entry, index) => index === activeDay ? { ...entry, events: [...entry.events, item] } : entry));
+    setPlannerOpen(null); notify("Item added to your itinerary.");
   }
 
   return (
@@ -206,9 +247,9 @@ export default function Home() {
             <span className="flag">✦</span>
             <span>
               <small>CURRENT TRIP</small>
-              <strong>Swiss Escape</strong>
+              <strong>{tripName}</strong>
             </span>
-            <button aria-label="Switch trip">⌄</button>
+            <button aria-label="Create a new trip" onClick={() => setPlannerOpen("trip")}>＋</button>
           </div>
           <div className="top-actions">
             <button className="icon-button" aria-label="Notifications" onClick={() => notify("You’re all caught up")}>●<i /></button>
@@ -225,9 +266,9 @@ export default function Home() {
         <div className="content">
           <div className="hero-row">
             <div>
-              <div className="eyebrow"><span /> 9 DAYS · 4 TRAVELERS</div>
-              <h1>Swiss Escape</h1>
-              <p>Zürich <b>→</b> Interlaken <b>→</b> Zermatt</p>
+              <div className="eyebrow"><span /> {itineraryDays.length} DAYS · {tripTravelers} TRAVELER{tripTravelers === 1 ? "" : "S"}</div>
+              <h1>{tripName}</h1>
+              <p>{tripRoute}</p>
             </div>
             <div className="date-range">
               <span>12</span>
@@ -256,11 +297,11 @@ export default function Home() {
             <section className="itinerary-panel">
               <div className="section-heading">
                 <div><span>YOUR ITINERARY</span><h2>Day by day</h2></div>
-                <button onClick={() => notify("New itinerary item started")}>＋ Add item</button>
+                <div className="heading-actions"><button onClick={() => setPlannerOpen("day")}>＋ Add day</button><button onClick={() => setPlannerOpen("item")}>＋ Add item</button></div>
               </div>
 
               <div className="day-tabs" role="tablist" aria-label="Trip days">
-                {days.map((item, index) => (
+                {itineraryDays.map((item, index) => (
                   <button
                     role="tab"
                     aria-selected={activeDay === index}
@@ -271,8 +312,8 @@ export default function Home() {
                     <small>{item.short}</small><strong>{item.date}</strong>
                   </button>
                 ))}
-                <button className="more-days" onClick={() => notify("Five more days in this trip")}>
-                  <small>MORE</small><strong>+5</strong>
+                <button className="more-days" onClick={() => setPlannerOpen("day")}>
+                  <small>ADD</small><strong>+</strong>
                 </button>
               </div>
 
@@ -282,6 +323,7 @@ export default function Home() {
               </div>
 
               <div className="timeline">
+                {day.events.length === 0 && <button className="empty-day" onClick={() => setPlannerOpen("item")}>＋ Add your first plan for this day</button>}
                 {day.events.map((event, index) => (
                   <article className="timeline-item" key={`${event.time}-${event.title}`}>
                     <time>{event.time}</time>
@@ -350,6 +392,16 @@ export default function Home() {
       )}
 
       {toast && <div className="toast" role="status">✓ {toast}</div>}
+      {plannerOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setPlannerOpen(null)}>
+          <section className="modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
+            <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
+            {plannerOpen === "trip" && <form onSubmit={createTrip}><span className="eyebrow">NEW ITINERARY</span><h2>Create any trip</h2><label>Trip name<input name="name" placeholder="e.g. Japan in spring" required autoFocus /></label><label>Route or destination<input name="route" placeholder="e.g. Tokyo → Kyoto → Osaka" required /></label><div className="form-row"><label>Start date<input name="start" type="date" /></label><label>Travelers<input name="travelers" type="number" min="1" defaultValue="1" /></label></div><label>First day title<input name="firstDay" placeholder="e.g. Arrival in Tokyo" /></label><button className="primary-action">Create itinerary</button></form>}
+            {plannerOpen === "day" && <form onSubmit={addDay}><span className="eyebrow">ADD A DAY</span><h2>Shape your itinerary</h2><label>Date<input name="date" type="date" autoFocus /></label><label>Day title<input name="label" placeholder="e.g. Beach day" required /></label><button className="primary-action">Add day</button></form>}
+            {plannerOpen === "item" && <form onSubmit={addItem}><span className="eyebrow">ADD TO DAY {activeDay + 1}</span><h2>What are you planning?</h2><label>Title<input name="title" placeholder="e.g. Dinner reservation" required autoFocus /></label><div className="form-row"><label>Time<input name="time" type="time" /></label><label>Type<select name="kind" defaultValue="activity"><option value="activity">Activity</option><option value="flight">Flight</option><option value="train">Train</option><option value="stay">Stay</option><option value="food">Food</option></select></label></div><label>Details<input name="details" placeholder="Location, confirmation, notes…" /></label><button className="primary-action">Add to itinerary</button></form>}
+          </section>
+        </div>
+      )}
     </main>
   );
 }
