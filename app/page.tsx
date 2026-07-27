@@ -533,6 +533,24 @@ export default function Home() {
     }
   }
 
+  // Trip data can only be created, edited, or deleted while signed in, so it
+  // always has an account to sync to. Guests get a read-only view.
+  function requireSignIn(action: string): boolean {
+    if (user) return true;
+    setPlannerOpen(null);
+    setAuthError("");
+    setAuthModalOpen(true);
+    notify(`Sign in to ${action}`);
+    return false;
+  }
+
+  function openMutationPanel(
+    type: Exclude<NonNullable<typeof plannerOpen>, "flight" | "weather" | "trip-switcher" | "travelers">
+  ) {
+    if (!requireSignIn("edit your trip")) return;
+    setPlannerOpen(type);
+  }
+
   // Auth Handlers
   async function handleAuthSubmit(e: FormEvent) {
     e.preventDefault();
@@ -581,6 +599,7 @@ export default function Home() {
   // Trip & Itinerary Handlers - Multi-Trip
   function createTrip(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requireSignIn("create a trip")) return;
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") || "My Trip");
     const route = String(form.get("route") || "Custom Route");
@@ -645,6 +664,7 @@ export default function Home() {
 
   function addDay(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requireSignIn("add a day")) return;
     const form = new FormData(event.currentTarget);
     const entered = String(form.get("date") || "");
     const date = entered ? new Date(`${entered}T12:00:00`) : new Date(Date.now() + itineraryDays.length * 86400000);
@@ -663,6 +683,7 @@ export default function Home() {
 
   function editCurrentDay(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requireSignIn("edit this day")) return;
     const form = new FormData(event.currentTarget);
     const newLabel = String(form.get("label") || day.label);
     updateActiveTrip((trip) => ({
@@ -674,6 +695,7 @@ export default function Home() {
   }
 
   function deleteCurrentDay() {
+    if (!requireSignIn("delete a day")) return;
     if (itineraryDays.length <= 1) {
       notify("Trip must have at least one day!");
       return;
@@ -689,6 +711,7 @@ export default function Home() {
 
   function addItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requireSignIn("add an item")) return;
     const form = new FormData(event.currentTarget);
     const rawTime = String(form.get("time") || "");
     const item: DayEvent = {
@@ -708,6 +731,7 @@ export default function Home() {
 
   function editItemSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requireSignIn("edit this activity")) return;
     if (!selectedEvent) return;
     const form = new FormData(event.currentTarget);
     const rawEditTime = String(form.get("time") || selectedEvent.time);
@@ -739,6 +763,7 @@ export default function Home() {
   }
 
   function deleteSelectedEvent() {
+    if (!requireSignIn("delete this activity")) return;
     if (!selectedEvent) return;
     updateActiveTrip((trip) => ({
       ...trip,
@@ -761,6 +786,7 @@ export default function Home() {
   // Expense Handlers
   function addExpenseSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requireSignIn("add an expense")) return;
     const form = new FormData(event.currentTarget);
     const newExp: Expense = {
       id: "exp-" + Date.now(),
@@ -780,6 +806,7 @@ export default function Home() {
   }
 
   function deleteExpense(id: string) {
+    if (!requireSignIn("delete an expense")) return;
     updateActiveTrip((trip) => ({
       ...trip,
       expenses: trip.expenses.filter((e) => e.id !== id),
@@ -788,6 +815,7 @@ export default function Home() {
   }
 
   function settleAllBalances() {
+    if (!requireSignIn("settle balances")) return;
     updateActiveTrip((trip) => ({
       ...trip,
       expenses: trip.expenses.map((e) => ({ ...e, settled: true })),
@@ -799,6 +827,7 @@ export default function Home() {
   // Wallet Handlers
   function addPassSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requireSignIn("add a pass")) return;
     const form = new FormData(event.currentTarget);
     const newDoc: WalletDoc = {
       id: "w-" + Date.now(),
@@ -817,6 +846,7 @@ export default function Home() {
   }
 
   function deleteWalletDoc(id: string) {
+    if (!requireSignIn("delete a document")) return;
     updateActiveTrip((trip) => ({
       ...trip,
       walletDocs: trip.walletDocs.filter((w) => w.id !== id),
@@ -827,6 +857,7 @@ export default function Home() {
   // Team & Map Handlers
   function addTravelerSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requireSignIn("invite a traveler")) return;
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") || "New Traveler");
     const email = String(form.get("email") || "traveler@example.com");
@@ -843,6 +874,7 @@ export default function Home() {
   }
 
   function removeTraveler(email: string) {
+    if (!requireSignIn("remove a traveler")) return;
     if (travelersList.length <= 1) {
       notify("Trip must have at least one organizer.");
       return;
@@ -860,6 +892,7 @@ export default function Home() {
 
   function addMapPinSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requireSignIn("add a map pin")) return;
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") || "New Place");
     const code = String(form.get("code") || name.slice(0, 3)).toUpperCase();
@@ -876,6 +909,7 @@ export default function Home() {
   }
 
   function toggleSavePinOffline(pinName: string) {
+    if (!requireSignIn("save a pin offline")) return;
     updateActiveTrip((trip) => ({
       ...trip,
       mapPins: trip.mapPins.map((p) => (p.name === pinName ? { ...p, savedOffline: !p.savedOffline } : p)),
@@ -967,7 +1001,7 @@ export default function Home() {
               <small>CURRENT TRIP ▾ ({savedTrips.length})</small>
               <strong>{tripName}</strong>
             </span>
-            <button aria-label="Create a new trip" onClick={() => setPlannerOpen("trip")} title="Create new itinerary">＋</button>
+            <button aria-label="Create a new trip" onClick={() => openMutationPanel("trip")} title="Create new itinerary">＋</button>
           </div>
 
           <div className="top-actions">
@@ -1059,7 +1093,7 @@ export default function Home() {
                 <strong>Plan your arrival transport</strong>
                 <span>Add a flight or train pass in your Wallet or Itinerary</span>
               </div>
-              <button onClick={() => setPlannerOpen("item")} style={{ marginLeft: "auto" }}>Add Activity <span>→</span></button>
+              <button onClick={() => openMutationPanel("item")} style={{ marginLeft: "auto" }}>Add Activity <span>→</span></button>
             </div>
           )}
 
@@ -1128,7 +1162,7 @@ export default function Home() {
                   </section>
 
                   <section className="expense-card">
-                    <div className="rail-heading"><span>EXPENSES SNAPSHOT</span><button onClick={() => setPlannerOpen("expense")}>＋</button></div>
+                    <div className="rail-heading"><span>EXPENSES SNAPSHOT</span><button onClick={() => openMutationPanel("expense")}>＋</button></div>
                     <strong className="expense-total">CHF {totalExpenseAmount.toFixed(2)}</strong>
                     <button className="text-link" onClick={() => setActiveNav("Expenses")}>View Full Expense Breakdown <span>→</span></button>
                   </section>
@@ -1143,8 +1177,8 @@ export default function Home() {
                 <div className="section-heading">
                   <div><span>YOUR ITINERARY</span><h2>Day by day</h2></div>
                   <div className="heading-actions">
-                    <button onClick={() => setPlannerOpen("day")}>＋ Add day</button>
-                    <button onClick={() => setPlannerOpen("item")}>＋ Add item</button>
+                    <button onClick={() => openMutationPanel("day")}>＋ Add day</button>
+                    <button onClick={() => openMutationPanel("item")}>＋ Add item</button>
                   </div>
                 </div>
 
@@ -1160,7 +1194,7 @@ export default function Home() {
                       <small>{item.short}</small><strong>{item.date}</strong>
                     </button>
                   ))}
-                  <button className="more-days" onClick={() => setPlannerOpen("day")}>
+                  <button className="more-days" onClick={() => openMutationPanel("day")}>
                     <small>ADD</small><strong>+</strong>
                   </button>
                 </div>
@@ -1171,7 +1205,7 @@ export default function Home() {
                   
                   {dayDropdownOpen && (
                     <div className="dropdown-menu">
-                      <button className="dropdown-item" onClick={() => { setDayDropdownOpen(false); setPlannerOpen("edit-day"); }}>Edit Day Title</button>
+                      <button className="dropdown-item" onClick={() => { setDayDropdownOpen(false); openMutationPanel("edit-day"); }}>Edit Day Title</button>
                       <button className="dropdown-item danger" onClick={deleteCurrentDay}>Delete Day</button>
                     </div>
                   )}
@@ -1179,7 +1213,7 @@ export default function Home() {
 
                 <div className="timeline">
                   {day.events.length === 0 && (
-                    <button className="empty-day" onClick={() => setPlannerOpen("item")}>
+                    <button className="empty-day" onClick={() => openMutationPanel("item")}>
                       ＋ Add your first plan for this day
                     </button>
                   )}
@@ -1191,7 +1225,7 @@ export default function Home() {
                         className="event-card" 
                         onClick={() => {
                           setSelectedEvent(event);
-                          setPlannerOpen("edit-item");
+                          openMutationPanel("edit-item");
                         }}
                       >
                         <span>
@@ -1221,7 +1255,7 @@ export default function Home() {
                 <section className="expense-card">
                   <div className="rail-heading">
                     <span>GROUP EXPENSES</span>
-                    <button onClick={() => setPlannerOpen("expense")}>＋</button>
+                    <button onClick={() => openMutationPanel("expense")}>＋</button>
                   </div>
                   <strong className="expense-total">CHF {totalExpenseAmount.toFixed(2)}</strong>
                   <small>Total spent so far</small>
@@ -1265,7 +1299,7 @@ export default function Home() {
             <div className="map-view-container view-fade">
               <div className="section-heading">
                 <div><span>INTERACTIVE TRIP MAP</span><h2>Route & Destinations</h2></div>
-                <button onClick={() => setPlannerOpen("map-pin")}>＋ Add Pin</button>
+                <button onClick={() => openMutationPanel("map-pin")}>＋ Add Pin</button>
               </div>
 
               <div className="map-canvas">
@@ -1302,7 +1336,7 @@ export default function Home() {
               <div>
                 <div className="section-heading">
                   <div><span>GROUP EXPENSES</span><h2>All Transactions</h2></div>
-                  <button onClick={() => setPlannerOpen("expense")}>＋ Add Expense</button>
+                  <button onClick={() => openMutationPanel("expense")}>＋ Add Expense</button>
                 </div>
 
                 <div className="expense-list">
@@ -1342,7 +1376,7 @@ export default function Home() {
                     ))}
                   </div>
 
-                  <button className="primary-action" style={{ marginTop: "16px" }} onClick={() => setPlannerOpen("settle")}>Settle Balances</button>
+                  <button className="primary-action" style={{ marginTop: "16px" }} onClick={() => openMutationPanel("settle")}>Settle Balances</button>
                 </section>
               </aside>
             </div>
@@ -1352,7 +1386,7 @@ export default function Home() {
             <div className="wallet-view view-fade">
               <div className="section-heading">
                 <div><span>TRIP WALLET</span><h2>Tickets, Passes & Documents</h2></div>
-                <button onClick={() => setPlannerOpen("pass")}>＋ Add Pass</button>
+                <button onClick={() => openMutationPanel("pass")}>＋ Add Pass</button>
               </div>
 
               <div className="wallet-grid">
@@ -1681,7 +1715,7 @@ export default function Home() {
                 </div>
               ))}
             </div>
-            <button className="primary-action" onClick={() => setPlannerOpen("trip")}>＋ Create New Trip</button>
+            <button className="primary-action" onClick={() => openMutationPanel("trip")}>＋ Create New Trip</button>
           </section>
         </div>
       )}
