@@ -43,3 +43,9 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.android-toolchain/
+/android/.android/
+/android/.gradle/
+/android/local.properties
+/android/app/build/
+/android/build/

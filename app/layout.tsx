@@ -27,6 +27,19 @@ export async function generateMetadata(): Promise<Metadata> {
     title: "JourneySync — Every plan. Every person. One journey.",
     description:
       "A calm, collaborative home for itineraries, travel documents, group expenses, and real-time trip updates.",
+    manifest: "/manifest.webmanifest",
+    applicationName: "JourneySync",
+    icons: {
+      icon: "/favicon.svg",
+      shortcut: "/favicon.svg",
+      apple: "/favicon.svg",
+    },
+    other: {
+      "theme-color": "#0c79d8",
+      "mobile-web-app-capable": "yes",
+      "apple-mobile-web-app-capable": "yes",
+      "apple-mobile-web-app-status-bar-style": "default",
+    },
     openGraph: {
       title: "JourneySync",
       description: "Every plan. Every person. One journey.",
