@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.manavdesai.journeysync"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.manavdesai.journeysync"
@@ -33,11 +33,6 @@ android {
 
 dependencies {
     implementation("com.google.androidbrowserhelper:androidbrowserhelper:2.6.2")
-    implementation("androidx.browser:browser") {
-        version {
-            strictly("1.8.0")
-        }
-    }
     implementation(platform("com.google.firebase:firebase-bom:34.16.0"))
     implementation("com.google.firebase:firebase-auth")
 }
