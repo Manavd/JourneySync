@@ -276,6 +276,47 @@ function formatTime(raw: string): string {
   return `${h}:${m} ${ampm}`;
 }
 
+function friendlyAuthError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("auth/invalid-credential") || normalized.includes("invalid_login_credentials")) {
+    return "That email or password is incorrect. Check both fields and try again.";
+  }
+  if (normalized.includes("auth/user-not-found")) {
+    return "No JourneySync account exists for that email. Choose Register to create one.";
+  }
+  if (normalized.includes("auth/wrong-password")) {
+    return "That password is incorrect. Please try again.";
+  }
+  if (normalized.includes("auth/email-already-in-use")) {
+    return "An account already exists for that email. Choose Sign In instead.";
+  }
+  if (normalized.includes("auth/weak-password")) {
+    return "Choose a stronger password with at least six characters.";
+  }
+  if (normalized.includes("auth/invalid-email")) {
+    return "Enter a valid email address.";
+  }
+  if (normalized.includes("auth/too-many-requests")) {
+    return "Firebase temporarily blocked more attempts. Wait a moment, then try again.";
+  }
+  if (normalized.includes("auth/popup-closed-by-user") || normalized.includes("auth/cancelled-popup-request")) {
+    return "Google sign-in was cancelled before it finished.";
+  }
+  if (normalized.includes("auth/popup-blocked")) {
+    return "The Google sign-in window was blocked. Allow popups for this site and try again.";
+  }
+  if (normalized.includes("auth/unauthorized-domain")) {
+    return "Google sign-in is not authorized for this site domain in Firebase yet.";
+  }
+  if (normalized.includes("firebase configuration") || normalized.includes("firebase initialization")) {
+    return message;
+  }
+
+  return "Firebase could not sign you in. Please try again.";
+}
+
 export default function Home() {
   // Navigation & User State
   const [activeNav, setActiveNav] = useState("Itinerary");
@@ -284,6 +325,9 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authError, setAuthError] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // App Data State - Multi-Trip Architecture
@@ -355,7 +399,9 @@ export default function Home() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
+      setAuthChecking(false);
       if (currentUser) {
+        setAuthError("");
         notify(`Welcome back, ${currentUser.displayName || currentUser.email}`);
         // Load data from Firestore
         try {
@@ -490,32 +536,46 @@ export default function Home() {
   // Auth Handlers
   async function handleAuthSubmit(e: FormEvent) {
     e.preventDefault();
+    setAuthError("");
+    setAuthLoading(true);
     try {
       if (authMode === "login") {
         await signInWithEmailAndPassword(auth, authEmail, authPassword);
-        setAuthModalOpen(false);
       } else {
         await createUserWithEmailAndPassword(auth, authEmail, authPassword);
-        setAuthModalOpen(false);
       }
+      setAuthPassword("");
     } catch (err) {
-      notify(err instanceof Error ? err.message : "Authentication error");
+      setAuthError(friendlyAuthError(err));
+    } finally {
+      setAuthLoading(false);
     }
   }
 
   async function handleGoogleAuth() {
+    setAuthError("");
+    setAuthLoading(true);
     try {
       await signInWithPopup(auth, googleProvider);
-      setAuthModalOpen(false);
-    } catch {
-      notify("Google sign-in error or cancelled");
+    } catch (err) {
+      setAuthError(friendlyAuthError(err));
+    } finally {
+      setAuthLoading(false);
     }
   }
 
   async function handleLogOut() {
-    await signOut(auth);
-    setAuthModalOpen(false);
-    notify("Logged out successfully");
+    setAuthError("");
+    setAuthLoading(true);
+    try {
+      await signOut(auth);
+      setAuthPassword("");
+      notify("Logged out successfully");
+    } catch (err) {
+      setAuthError(friendlyAuthError(err));
+    } finally {
+      setAuthLoading(false);
+    }
   }
 
   // Trip & Itinerary Handlers - Multi-Trip
@@ -875,11 +935,21 @@ export default function Home() {
             <i>✓</i>
           </button>
 
-          <button className="profile" onClick={() => setAuthModalOpen(true)}>
-            <span className="avatar avatar-me">{user ? (user.displayName ? user.displayName.slice(0, 2).toUpperCase() : user.email?.slice(0, 2).toUpperCase()) : "MS"}</span>
+          <button
+            className={`profile ${user ? "signed-in" : "signed-out"}`}
+            onClick={() => {
+              setAuthError("");
+              setAuthModalOpen(true);
+            }}
+            aria-label={user ? `Open account: signed in as ${user.email || user.displayName || "JourneySync user"}` : "Open account: sign in to JourneySync"}
+          >
+            <span className="profile-avatar-wrap">
+              <span className="avatar avatar-me">{user ? (user.displayName ? user.displayName.slice(0, 2).toUpperCase() : user.email?.slice(0, 2).toUpperCase()) : "MS"}</span>
+              <i aria-hidden="true" />
+            </span>
             <span>
               <strong>{user ? (user.displayName || user.email?.split("@")[0]) : "Manav S. (Guest)"}</strong>
-              <small>{user ? "Logged In Account" : "Click to Sign In / Sync"}</small>
+              <small>{authChecking ? "Checking account…" : user ? (synced ? "Signed in · Cloud synced" : "Signed in · Sync paused") : "Click to sign in & sync"}</small>
             </span>
             <span>•••</span>
           </button>
@@ -1321,45 +1391,58 @@ export default function Home() {
       {authModalOpen && (
         <div className="modal-backdrop" onMouseDown={() => setAuthModalOpen(false)}>
           <section className="modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-            <button className="modal-close" onClick={() => setAuthModalOpen(false)}>×</button>
+            <button className="modal-close" onClick={() => setAuthModalOpen(false)} aria-label="Close account dialog">×</button>
             <span className="eyebrow">FIREBASE ACCOUNT</span>
             <h2>{user ? "Your Profile" : (authMode === "login" ? "Sign in to JourneySync" : "Create your Account")}</h2>
 
             {user ? (
               <div>
+                <div className="auth-success" role="status">
+                  <span aria-hidden="true">✓</span>
+                  <div>
+                    <strong>You’re signed in</strong>
+                    <small>Your Firebase session stays active when you return.</small>
+                  </div>
+                </div>
                 <p style={{ fontSize: "11px", color: "#475569", marginBottom: "16px" }}>
                   Signed in as <strong>{user.email}</strong>
                 </p>
-                <div style={{ background: "#f1f5f9", padding: "14px", borderRadius: "8px", marginBottom: "20px", fontSize: "10px" }}>
-                  ✓ Real-time Firestore sync active<br />
-                  ✓ Cloud itinerary backup enabled
+                <div className={`auth-sync-status ${synced ? "is-synced" : "is-paused"}`}>
+                  <strong>{synced ? "Cloud sync is active" : "Cloud sync needs attention"}</strong>
+                  <small>{synced ? "Your itinerary is backed up to Firestore." : "Your local trip is safe. JourneySync will retry cloud sync."}</small>
                 </div>
-                <button className="danger-action" onClick={handleLogOut}>Sign Out</button>
+                {authError && <div className="auth-error" role="alert">{authError}</div>}
+                <button className="danger-action" onClick={handleLogOut} disabled={authLoading}>
+                  {authLoading ? "Signing out…" : "Sign Out"}
+                </button>
               </div>
             ) : (
               <form onSubmit={handleAuthSubmit}>
                 <div className="auth-tabs">
-                  <button type="button" className={`auth-tab ${authMode === "login" ? "active" : ""}`} onClick={() => setAuthMode("login")}>Sign In</button>
-                  <button type="button" className={`auth-tab ${authMode === "signup" ? "active" : ""}`} onClick={() => setAuthMode("signup")}>Register</button>
+                  <button type="button" className={`auth-tab ${authMode === "login" ? "active" : ""}`} onClick={() => { setAuthMode("login"); setAuthError(""); }} disabled={authLoading}>Sign In</button>
+                  <button type="button" className={`auth-tab ${authMode === "signup" ? "active" : ""}`} onClick={() => { setAuthMode("signup"); setAuthError(""); }} disabled={authLoading}>Register</button>
                 </div>
 
                 <label>Email Address
-                  <input type="email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} required placeholder="you@example.com" />
+                  <input type="email" value={authEmail} onChange={(e) => { setAuthEmail(e.target.value); setAuthError(""); }} required placeholder="you@example.com" autoComplete="email" disabled={authLoading} />
                 </label>
 
                 <label>Password
-                  <input type="password" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} required placeholder="••••••••" />
+                  <input type="password" value={authPassword} onChange={(e) => { setAuthPassword(e.target.value); setAuthError(""); }} required placeholder="••••••••" autoComplete={authMode === "login" ? "current-password" : "new-password"} disabled={authLoading} />
                 </label>
 
-                <button className="primary-action" type="submit">
-                  {authMode === "login" ? "Sign In with Email" : "Create Account"}
+                {authError && <div className="auth-error" role="alert">{authError}</div>}
+
+                <button className="primary-action" type="submit" disabled={authLoading || authChecking}>
+                  {authLoading ? "Connecting to Firebase…" : authChecking ? "Checking account…" : authMode === "login" ? "Sign In with Email" : "Create Account"}
                 </button>
 
                 <div className="auth-divider">OR</div>
 
-                <button type="button" className="google-btn" onClick={handleGoogleAuth}>
-                  Continue with Google
+                <button type="button" className="google-btn" onClick={handleGoogleAuth} disabled={authLoading || authChecking}>
+                  {authLoading ? "Please wait…" : "Continue with Google"}
                 </button>
+                <p className="auth-help">The dialog stays open until Firebase confirms your account.</p>
               </form>
             )}
           </section>
