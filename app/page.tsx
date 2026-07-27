@@ -41,6 +41,23 @@ type Expense = {
   paidBy: string;
   date: string;
   category: string;
+  settled?: boolean;
+};
+
+type Traveler = {
+  name: string;
+  role: string;
+  email: string;
+  avatar: string;
+  bg: string;
+};
+
+type MapPin = {
+  name: string;
+  code: string;
+  desc: string;
+  temp: string;
+  savedOffline?: boolean;
 };
 
 type WalletDoc = {
@@ -50,6 +67,19 @@ type WalletDoc = {
   code: string;
   icon: string;
   coralIcon?: boolean;
+};
+
+type Trip = {
+  id: string;
+  name: string;
+  route: string;
+  startDate: string;
+  travelersCount: number;
+  days: Day[];
+  expenses: Expense[];
+  walletDocs: WalletDoc[];
+  mapPins: MapPin[];
+  travelersList: Traveler[];
 };
 
 const initialDays: Day[] = [
@@ -196,6 +226,33 @@ const initialWalletDocs: WalletDoc[] = [
   { id: "w-6", title: "Interlaken Hotel", meta: "Höheweg 74 · Conf #4091", code: "INT-HOTEL-4091", icon: "IH" }
 ];
 
+const initialTravelers: Traveler[] = [
+  { name: "Manav S.", role: "Trip organizer", email: "manav@example.com", avatar: "MS", bg: "avatar-me" },
+  { name: "Amelia L.", role: "Co-organizer", email: "amelia@example.com", avatar: "AL", bg: "peach" },
+  { name: "Noah K.", role: "Traveler", email: "noah@example.com", avatar: "NK", bg: "blue" },
+  { name: "Riya P.", role: "Traveler", email: "riya@example.com", avatar: "RP", bg: "green" },
+];
+
+const initialMapPins: MapPin[] = [
+  { name: "Zürich", code: "ZRH", desc: "Arrival & Old Town", temp: "18°C" },
+  { name: "Interlaken", code: "INT", desc: "Alpine Lakes & Funicular", temp: "16°C" },
+  { name: "Lauterbrunnen", code: "LTB", desc: "Waterfalls & Valley Trail", temp: "15°C" },
+  { name: "Zermatt", code: "ZMT", desc: "Matterhorn Peak", temp: "12°C" },
+];
+
+const initialTrip: Trip = {
+  id: "swiss-escape",
+  name: "Swiss Escape",
+  route: "Zürich → Interlaken → Zermatt",
+  startDate: "2026-09-12",
+  travelersCount: 4,
+  days: initialDays,
+  expenses: initialExpenses,
+  walletDocs: initialWalletDocs,
+  mapPins: initialMapPins,
+  travelersList: initialTravelers,
+};
+
 const iconFor = {
   flight: "✈",
   stay: "⌂",
@@ -203,6 +260,21 @@ const iconFor = {
   train: "↗",
   activity: "◎",
 };
+
+/** Convert 24h "HH:MM" from <input type="time"> to "h:MM AM/PM" display format */
+function formatTime(raw: string): string {
+  if (!raw) return "12:00 PM";
+  // Already in 12h format (has AM/PM)
+  if (/am|pm/i.test(raw)) return raw;
+  const parts = raw.split(":");
+  if (parts.length < 2) return raw;
+  let h = parseInt(parts[0], 10);
+  const m = parts[1].padStart(2, "0");
+  const ampm = h >= 12 ? "PM" : "AM";
+  if (h === 0) h = 12;
+  else if (h > 12) h -= 12;
+  return `${h}:${m} ${ampm}`;
+}
 
 export default function Home() {
   // Navigation & User State
@@ -214,29 +286,70 @@ export default function Home() {
   const [authPassword, setAuthPassword] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // App Data State
+  // App Data State - Multi-Trip Architecture
+  const [savedTrips, setSavedTrips] = useState<Trip[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("journeysync_all_trips");
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && Array.isArray(parsed.savedTrips) && parsed.savedTrips.length > 0) {
+            return parsed.savedTrips;
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    return [initialTrip];
+  });
+  const [activeTripId, setActiveTripId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = localStorage.getItem("journeysync_all_trips");
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && parsed.activeTripId) return parsed.activeTripId;
+        }
+      } catch { /* ignore */ }
+    }
+    return "swiss-escape";
+  });
+
+  const activeTrip = useMemo(() => {
+    return savedTrips.find((t) => t.id === activeTripId) || savedTrips[0] || initialTrip;
+  }, [savedTrips, activeTripId]);
+
+  const {
+    name: tripName,
+    route: tripRoute,
+    travelersCount: tripTravelers,
+    days: itineraryDays,
+    expenses,
+    walletDocs,
+    mapPins,
+    travelersList,
+  } = activeTrip;
+
   const [activeDay, setActiveDay] = useState(0);
-  const [itineraryDays, setItineraryDays] = useState<Day[]>(initialDays);
-  const [tripName, setTripName] = useState("Swiss Escape");
-  const [tripRoute, setTripRoute] = useState("Zürich → Interlaken → Zermatt");
-  const [tripTravelers, setTripTravelers] = useState(4);
-  const [travelersList, setTravelersList] = useState([
-    { name: "Manav S.", role: "Trip organizer", email: "manav@example.com", avatar: "MS", bg: "avatar-me" },
-    { name: "Amelia L.", role: "Co-organizer", email: "amelia@example.com", avatar: "AL", bg: "peach" },
-    { name: "Noah K.", role: "Traveler", email: "noah@example.com", avatar: "NK", bg: "blue" },
-    { name: "Riya P.", role: "Traveler", email: "riya@example.com", avatar: "RP", bg: "green" },
-  ]);
-  const [expenses, setExpenses] = useState<Expense[]>(initialExpenses);
-  const [walletDocs, setWalletDocs] = useState<WalletDoc[]>(initialWalletDocs);
+
+  function updateActiveTrip(updater: (currentTrip: Trip) => Trip) {
+    setSavedTrips((prevTrips) =>
+      prevTrips.map((trip) => {
+        if (trip.id === activeTrip.id) {
+          return updater(trip);
+        }
+        return trip;
+      })
+    );
+  }
 
   // Status & Modals
   const [synced, setSynced] = useState(true);
   const [toast, setToast] = useState("");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [plannerOpen, setPlannerOpen] = useState<"trip" | "day" | "item" | "edit-item" | "edit-day" | "expense" | "pass" | "flight" | "weather" | "travelers" | null>(null);
+  const [plannerOpen, setPlannerOpen] = useState<"trip" | "day" | "item" | "edit-item" | "edit-day" | "expense" | "pass" | "flight" | "weather" | "travelers" | "trip-switcher" | "map-pin" | "settle" | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<DayEvent | null>(null);
   const [dayDropdownOpen, setDayDropdownOpen] = useState(false);
-  const [selectedMapPin, setSelectedMapPin] = useState("Zürich");
+  const [selectedMapPin, setSelectedMapPin] = useState<string>(() => mapPins[0]?.name || "Zürich");
 
   // Auth Listener & Firestore Sync
   useEffect(() => {
@@ -246,17 +359,16 @@ export default function Home() {
         notify(`Welcome back, ${currentUser.displayName || currentUser.email}`);
         // Load data from Firestore
         try {
-          const docRef = doc(db, "users", currentUser.uid, "trips", "swiss-escape");
+          const docRef = doc(db, "users", currentUser.uid, "user_trips", "all_trips");
           const snap = await getDoc(docRef);
           if (snap.exists()) {
             const data = snap.data();
-            if (data.tripName) setTripName(data.tripName);
-            if (data.tripRoute) setTripRoute(data.tripRoute);
-            if (data.itineraryDays) setItineraryDays(data.itineraryDays);
-            if (data.expenses) setExpenses(data.expenses);
-            if (data.walletDocs) setWalletDocs(data.walletDocs);
+            if (data && data.savedTrips && Array.isArray(data.savedTrips) && data.savedTrips.length > 0) {
+              setSavedTrips(data.savedTrips as Trip[]);
+              if (data.activeTripId) setActiveTripId(data.activeTripId as string);
+            }
           }
-        } catch (e) {
+        } catch {
           console.log("Using local state / fallback for user data");
         }
       }
@@ -264,24 +376,31 @@ export default function Home() {
     return () => unsubscribe();
   }, []);
 
-  // Sync to Firestore whenever data changes (if logged in)
+  // Sync to Firestore and LocalStorage whenever data changes
   useEffect(() => {
-    if (user) {
+    if (typeof window !== "undefined") {
       try {
-        const docRef = doc(db, "users", user.uid, "trips", "swiss-escape");
-        setDoc(docRef, {
-          tripName,
-          tripRoute,
-          itineraryDays,
-          expenses,
-          walletDocs,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-      } catch (e) {
-        console.error("Firestore sync error:", e);
-      }
+        localStorage.setItem("journeysync_all_trips", JSON.stringify({ savedTrips, activeTripId }));
+      } catch { /* ignore */ }
     }
-  }, [user, tripName, tripRoute, itineraryDays, expenses, walletDocs]);
+    if (user) {
+      const syncData = async () => {
+        try {
+          const docRef = doc(db, "users", user.uid, "user_trips", "all_trips");
+          await setDoc(docRef, {
+            savedTrips,
+            activeTripId,
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+          setSynced(true);
+        } catch (e) {
+          console.error("Firestore sync error:", e);
+          setSynced(false);
+        }
+      };
+      syncData();
+    }
+  }, [user, savedTrips, activeTripId]);
 
   const day = useMemo(() => itineraryDays[activeDay] || itineraryDays[0] || { date: "12", short: "SAT", label: "Day 1", events: [] }, [activeDay, itineraryDays]);
 
@@ -289,9 +408,83 @@ export default function Home() {
     return expenses.reduce((sum, item) => sum + item.amount, 0);
   }, [expenses]);
 
+  const activeUnsettledAmount = useMemo(() => {
+    return expenses.filter(e => !e.settled).reduce((sum, item) => sum + item.amount, 0);
+  }, [expenses]);
+
+  // Compute per-person expense balances dynamically
+  const expenseBalances = useMemo(() => {
+    const unsettled = expenses.filter(e => !e.settled);
+    const perPerson = activeUnsettledAmount / Math.max(travelersList.length, 1);
+    return travelersList.map((t) => {
+      const paid = unsettled.filter(e => e.paidBy.toLowerCase().startsWith(t.name.split(" ")[0].toLowerCase())).reduce((a, b) => a + b.amount, 0);
+      const totalPaidEver = expenses.filter(e => e.paidBy.toLowerCase().startsWith(t.name.split(" ")[0].toLowerCase())).reduce((a, b) => a + b.amount, 0);
+      const balance = paid - perPerson;
+      return { ...t, paid: totalPaidEver, balance };
+    });
+  }, [expenses, activeUnsettledAmount, travelersList]);
+
+  // Compute trip date range from itinerary data and start date
+  const tripDateRange = useMemo(() => {
+    const startObj = new Date(activeTrip.startDate ? `${activeTrip.startDate}T12:00:00` : Date.now());
+    const monthStr = new Intl.DateTimeFormat("en-US", { month: "long" }).format(startObj).toUpperCase();
+    const yearStr = String(startObj.getFullYear() || 2026);
+    if (itineraryDays.length === 0) return { startDate: "01", endDate: "01", month: monthStr, year: yearStr };
+    const first = itineraryDays[0];
+    const last = itineraryDays[itineraryDays.length - 1];
+    return {
+      startDate: first.date,
+      endDate: last.date,
+      month: monthStr,
+      year: yearStr,
+    };
+  }, [itineraryDays, activeTrip.startDate]);
+
+  // Compute dynamic weather forecast for the trip
+  const dynamicWeatherForecast = useMemo(() => {
+    const startObj = new Date(activeTrip.startDate ? `${activeTrip.startDate}T12:00:00` : Date.now());
+    const dest = mapPins[0]?.name || tripName.split(" ")[0] || "Destination";
+    const conditions = [
+      { desc: "Partly Cloudy", icon: "☁", rain: "10%", offsetTemp: 0 },
+      { desc: "Sunny", icon: "☀", rain: "0%", offsetTemp: 3 },
+      { desc: "Light Showers", icon: "🌧", rain: "40%", offsetTemp: -2 },
+      { desc: "Clear Air", icon: "☀", rain: "5%", offsetTemp: -1 },
+      { desc: "Mostly Sunny", icon: "🌤", rain: "15%", offsetTemp: 1 },
+    ];
+    const baseTemp = parseInt(mapPins[0]?.temp || "18", 10) || 18;
+
+    return {
+      destination: dest,
+      days: conditions.map((c, i) => {
+        const d = new Date(startObj.getTime() + i * 86400000);
+        const dayStr = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" }).format(d);
+        return {
+          day: dayStr,
+          temp: `${baseTemp + c.offsetTemp}°C`,
+          desc: c.desc,
+          rain: c.rain,
+          icon: c.icon
+        };
+      })
+    };
+  }, [activeTrip.startDate, mapPins, tripName]);
+
+  // Compute arrival transport / flight banner from itinerary or wallet
+  const mainArrivalEvent = useMemo(() => {
+    for (const d of itineraryDays) {
+      const found = d.events.find(e => e.kind === "flight" || e.kind === "train");
+      if (found) return { title: found.title, meta: found.meta, time: found.time, status: found.status || "Planned", kind: found.kind };
+    }
+    const docFound = walletDocs.find(w => w.title.toLowerCase().includes("flight") || w.title.toLowerCase().includes("boarding") || w.title.toLowerCase().includes("train") || w.meta.toLowerCase().includes("lx") || w.meta.toLowerCase().includes("air"));
+    if (docFound) return { title: docFound.title, meta: docFound.meta, time: "Check pass", status: "In Wallet", kind: "flight" as const };
+    return null;
+  }, [itineraryDays, walletDocs]);
+
   function notify(message: string) {
     setToast(message);
-    window.setTimeout(() => setToast(""), 2800);
+    if (typeof window !== "undefined") {
+      window.setTimeout(() => setToast(""), 2800);
+    }
   }
 
   // Auth Handlers
@@ -325,12 +518,16 @@ export default function Home() {
     notify("Logged out successfully");
   }
 
-  // Trip & Itinerary Handlers
+  // Trip & Itinerary Handlers - Multi-Trip
   function createTrip(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") || "My Trip");
+    const route = String(form.get("route") || "Custom Route");
     const start = String(form.get("start") || "");
+    const travelersCount = Number(form.get("travelers") || 1);
     const date = start ? new Date(`${start}T12:00:00`) : new Date();
+
     const firstDay: Day = {
       id: "day-" + Date.now(),
       date: String(date.getDate()).padStart(2, "0"),
@@ -338,13 +535,52 @@ export default function Home() {
       label: String(form.get("firstDay") || "Arrival"),
       events: [],
     };
-    setTripName(String(form.get("name") || "My Trip"));
-    setTripRoute(String(form.get("route") || "Custom Route"));
-    setTripTravelers(Number(form.get("travelers") || 1));
-    setItineraryDays([firstDay]);
+
+    const routeParts = route.split(/→|->|,|-/).map((s) => s.trim()).filter(Boolean);
+    const newPins: MapPin[] = (routeParts.length > 0 ? routeParts : [name]).slice(0, 5).map((loc, idx) => ({
+      name: loc,
+      code: loc.substring(0, 3).toUpperCase(),
+      desc: idx === 0 ? "Starting point" : `Stop #${idx + 1} on route`,
+      temp: `${Math.floor(Math.random() * 8) + 16}°C`,
+    }));
+
+    const defaultOrganizer: Traveler = {
+      name: user ? (user.displayName || user.email?.split("@")[0] || "Organizer") : "Manav S.",
+      role: "Trip organizer",
+      email: user ? (user.email || "organizer@example.com") : "manav@example.com",
+      avatar: (user ? (user.displayName || user.email || "MS") : "MS").slice(0, 2).toUpperCase(),
+      bg: "avatar-me",
+    };
+    const newTravelers: Traveler[] = [defaultOrganizer];
+    for (let i = 1; i < travelersCount; i++) {
+      newTravelers.push({
+        name: `Traveler ${i + 1}`,
+        role: "Traveler",
+        email: `traveler${i + 1}@example.com`,
+        avatar: `T${i + 1}`,
+        bg: ["peach", "blue", "green", "coral"][i % 4],
+      });
+    }
+
+    const newTripObj: Trip = {
+      id: "trip-" + Date.now(),
+      name,
+      route,
+      startDate: start || date.toISOString().slice(0, 10),
+      travelersCount,
+      days: [firstDay],
+      expenses: [],
+      walletDocs: [],
+      mapPins: newPins,
+      travelersList: newTravelers,
+    };
+
+    setSavedTrips((prev) => [newTripObj, ...prev]);
+    setActiveTripId(newTripObj.id);
     setActiveDay(0);
+    setSelectedMapPin(newPins[0]?.name || name);
     setPlannerOpen(null);
-    notify("New trip itinerary created!");
+    notify(`New itinerary "${name}" created!`);
   }
 
   function addDay(event: FormEvent<HTMLFormElement>) {
@@ -359,7 +595,7 @@ export default function Home() {
       label: String(form.get("label") || "New Day"),
       events: [],
     };
-    setItineraryDays(current => [...current, newDay]);
+    updateActiveTrip((trip) => ({ ...trip, days: [...trip.days, newDay] }));
     setActiveDay(itineraryDays.length);
     setPlannerOpen(null);
     notify("New day added to trip!");
@@ -369,7 +605,10 @@ export default function Home() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const newLabel = String(form.get("label") || day.label);
-    setItineraryDays(current => current.map((d, index) => index === activeDay ? { ...d, label: newLabel } : d));
+    updateActiveTrip((trip) => ({
+      ...trip,
+      days: trip.days.map((d, index) => (index === activeDay ? { ...d, label: newLabel } : d)),
+    }));
     setPlannerOpen(null);
     notify("Day title updated!");
   }
@@ -379,7 +618,10 @@ export default function Home() {
       notify("Trip must have at least one day!");
       return;
     }
-    setItineraryDays(current => current.filter((_, index) => index !== activeDay));
+    updateActiveTrip((trip) => ({
+      ...trip,
+      days: trip.days.filter((_, index) => index !== activeDay),
+    }));
     setActiveDay(0);
     setDayDropdownOpen(false);
     notify("Day deleted.");
@@ -388,14 +630,18 @@ export default function Home() {
   function addItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const rawTime = String(form.get("time") || "");
     const item: DayEvent = {
       id: "ev-" + Date.now(),
-      time: String(form.get("time") || "12:00 PM"),
+      time: rawTime ? formatTime(rawTime) : "12:00 PM",
       title: String(form.get("title") || "Untitled activity"),
       meta: String(form.get("details") || "No details provided"),
       kind: (String(form.get("kind") || "activity")) as DayEvent["kind"],
     };
-    setItineraryDays(current => current.map((entry, index) => index === activeDay ? { ...entry, events: [...entry.events, item] } : entry));
+    updateActiveTrip((trip) => ({
+      ...trip,
+      days: trip.days.map((entry, index) => (index === activeDay ? { ...entry, events: [...entry.events, item] } : entry)),
+    }));
     setPlannerOpen(null);
     notify("Item added to day!");
   }
@@ -404,17 +650,29 @@ export default function Home() {
     event.preventDefault();
     if (!selectedEvent) return;
     const form = new FormData(event.currentTarget);
+    const rawEditTime = String(form.get("time") || selectedEvent.time);
     const updated: DayEvent = {
       ...selectedEvent,
       title: String(form.get("title") || selectedEvent.title),
-      time: String(form.get("time") || selectedEvent.time),
+      time: formatTime(rawEditTime),
       meta: String(form.get("details") || selectedEvent.meta),
       kind: String(form.get("kind") || selectedEvent.kind) as DayEvent["kind"],
     };
-    setItineraryDays(current => current.map((d, dIdx) => dIdx === activeDay ? {
-      ...d,
-      events: d.events.map(ev => ev.id === selectedEvent.id || (ev.title === selectedEvent.title && ev.time === selectedEvent.time) ? updated : ev)
-    } : d));
+    updateActiveTrip((trip) => ({
+      ...trip,
+      days: trip.days.map((d, dIdx) =>
+        dIdx === activeDay
+          ? {
+              ...d,
+              events: d.events.map((ev) =>
+                ev.id === selectedEvent.id || (ev.title === selectedEvent.title && ev.time === selectedEvent.time)
+                  ? updated
+                  : ev
+              ),
+            }
+          : d
+      ),
+    }));
     setPlannerOpen(null);
     setSelectedEvent(null);
     notify("Event updated!");
@@ -422,10 +680,19 @@ export default function Home() {
 
   function deleteSelectedEvent() {
     if (!selectedEvent) return;
-    setItineraryDays(current => current.map((d, dIdx) => dIdx === activeDay ? {
-      ...d,
-      events: d.events.filter(ev => !(ev.id === selectedEvent.id || (ev.title === selectedEvent.title && ev.time === selectedEvent.time)))
-    } : d));
+    updateActiveTrip((trip) => ({
+      ...trip,
+      days: trip.days.map((d, dIdx) =>
+        dIdx === activeDay
+          ? {
+              ...d,
+              events: d.events.filter(
+                (ev) => !(ev.id === selectedEvent.id || (ev.title === selectedEvent.title && ev.time === selectedEvent.time))
+              ),
+            }
+          : d
+      ),
+    }));
     setPlannerOpen(null);
     setSelectedEvent(null);
     notify("Event deleted!");
@@ -442,16 +709,31 @@ export default function Home() {
       currency: String(form.get("currency") || "CHF"),
       paidBy: String(form.get("paidBy") || "Manav"),
       date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      category: String(form.get("category") || "General")
+      category: String(form.get("category") || "General"),
     };
-    setExpenses(prev => [newExp, ...prev]);
+    updateActiveTrip((trip) => ({
+      ...trip,
+      expenses: [newExp, ...trip.expenses],
+    }));
     setPlannerOpen(null);
     notify(`Expense added: ${newExp.currency} ${newExp.amount}`);
   }
 
   function deleteExpense(id: string) {
-    setExpenses(prev => prev.filter(e => e.id !== id));
+    updateActiveTrip((trip) => ({
+      ...trip,
+      expenses: trip.expenses.filter((e) => e.id !== id),
+    }));
     notify("Expense removed");
+  }
+
+  function settleAllBalances() {
+    updateActiveTrip((trip) => ({
+      ...trip,
+      expenses: trip.expenses.map((e) => ({ ...e, settled: true })),
+    }));
+    setPlannerOpen(null);
+    notify("All group balances have been settled and marked as paid!");
   }
 
   // Wallet Handlers
@@ -464,16 +746,82 @@ export default function Home() {
       meta: String(form.get("meta") || "Ticket Document"),
       code: String(form.get("code") || "JS-TICKET-" + Math.floor(Math.random() * 10000)),
       icon: String(form.get("icon") || "DOC").substring(0, 3).toUpperCase(),
-      coralIcon: Math.random() > 0.5
+      coralIcon: Math.random() > 0.5,
     };
-    setWalletDocs(prev => [...prev, newDoc]);
+    updateActiveTrip((trip) => ({
+      ...trip,
+      walletDocs: [...trip.walletDocs, newDoc],
+    }));
     setPlannerOpen(null);
     notify("Document added to Trip Wallet");
   }
 
   function deleteWalletDoc(id: string) {
-    setWalletDocs(prev => prev.filter(w => w.id !== id));
+    updateActiveTrip((trip) => ({
+      ...trip,
+      walletDocs: trip.walletDocs.filter((w) => w.id !== id),
+    }));
     notify("Document deleted");
+  }
+
+  // Team & Map Handlers
+  function addTravelerSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") || "New Traveler");
+    const email = String(form.get("email") || "traveler@example.com");
+    const role = String(form.get("role") || "Traveler");
+    const avatar = name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "TR";
+    const bg = ["peach", "blue", "green", "coral"][travelersList.length % 4];
+
+    updateActiveTrip((trip) => ({
+      ...trip,
+      travelersCount: trip.travelersList.length + 1,
+      travelersList: [...trip.travelersList, { name, email, role, avatar, bg }],
+    }));
+    notify(`${name} added to travel team!`);
+  }
+
+  function removeTraveler(email: string) {
+    if (travelersList.length <= 1) {
+      notify("Trip must have at least one organizer.");
+      return;
+    }
+    updateActiveTrip((trip) => {
+      const newList = trip.travelersList.filter((t) => t.email !== email);
+      return {
+        ...trip,
+        travelersCount: newList.length,
+        travelersList: newList,
+      };
+    });
+    notify("Traveler removed from team.");
+  }
+
+  function addMapPinSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") || "New Place");
+    const code = String(form.get("code") || name.slice(0, 3)).toUpperCase();
+    const temp = String(form.get("temp") || "18°C");
+    const desc = String(form.get("desc") || "Route destination");
+
+    updateActiveTrip((trip) => ({
+      ...trip,
+      mapPins: [...trip.mapPins, { name, code, temp, desc }],
+    }));
+    setSelectedMapPin(name);
+    setPlannerOpen(null);
+    notify(`${name} pin added to map!`);
+  }
+
+  function toggleSavePinOffline(pinName: string) {
+    updateActiveTrip((trip) => ({
+      ...trip,
+      mapPins: trip.mapPins.map((p) => (p.name === pinName ? { ...p, savedOffline: !p.savedOffline } : p)),
+    }));
+    const pin = mapPins.find((p) => p.name === pinName);
+    notify(`Offline map for ${pinName} ${pin?.savedOffline ? "removed" : "downloaded and saved"}!`);
   }
 
   return (
@@ -544,12 +892,12 @@ export default function Home() {
           <button className="mobile-menu" aria-label="Open menu" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>≡</button>
 
           <div className="trip-switcher">
-            <span className="flag">✦</span>
-            <span>
-              <small>CURRENT TRIP</small>
+            <span className="flag" onClick={() => setPlannerOpen("trip-switcher")} style={{ cursor: "pointer" }}>✦</span>
+            <span onClick={() => setPlannerOpen("trip-switcher")} style={{ cursor: "pointer" }} title="Click to switch trips">
+              <small>CURRENT TRIP ▾ ({savedTrips.length})</small>
               <strong>{tripName}</strong>
             </span>
-            <button aria-label="Create a new trip" onClick={() => setPlannerOpen("trip")}>＋</button>
+            <button aria-label="Create a new trip" onClick={() => setPlannerOpen("trip")} title="Create new itinerary">＋</button>
           </div>
 
           <div className="top-actions">
@@ -610,32 +958,44 @@ export default function Home() {
               <p>{tripRoute}</p>
             </div>
             <div className="date-range">
-              <span>12</span>
-              <div><small>SEPTEMBER</small><strong>2026</strong></div>
+              <span>{tripDateRange.startDate}</span>
+              <div><small>{tripDateRange.month}</small><strong>{tripDateRange.year}</strong></div>
               <i>—</i>
-              <span>20</span>
-              <div><small>SEPTEMBER</small><strong>2026</strong></div>
+              <span>{tripDateRange.endDate}</span>
+              <div><small>{tripDateRange.month}</small><strong>{tripDateRange.year}</strong></div>
             </div>
           </div>
 
-          {/* Flight Banner */}
-          <div className="status-banner">
-            <div className="status-symbol">✈</div>
-            <div>
-              <small>NEXT UP · IN 18 HOURS</small>
-              <strong>SWISS LX 017 to Zürich</strong>
-              <span>New York JFK · Terminal 1</span>
+          {/* Flight / Arrival Banner */}
+          {mainArrivalEvent ? (
+            <div className="status-banner">
+              <div className="status-symbol">{mainArrivalEvent.kind === "train" ? "↗" : "✈"}</div>
+              <div>
+                <small>NEXT UP · {mainArrivalEvent.time}</small>
+                <strong>{mainArrivalEvent.title}</strong>
+                <span>{mainArrivalEvent.meta}</span>
+              </div>
+              <div className="flight-line">
+                <span>START</span><i><b>{mainArrivalEvent.kind === "train" ? "↗" : "✈"}</b></i><span>DEST</span>
+              </div>
+              <div className="flight-time"><strong>{mainArrivalEvent.time}</strong><span className="on-time">{mainArrivalEvent.status}</span></div>
+              <button onClick={() => setPlannerOpen("flight")}>View details <span>→</span></button>
             </div>
-            <div className="flight-line">
-              <span>JFK</span><i><b>✈</b></i><span>ZRH</span>
+          ) : (
+            <div className="status-banner" style={{ background: "#f8fafc", border: "1px dashed #cbd5e1" }}>
+              <div className="status-symbol">✦</div>
+              <div>
+                <small>NO ARRIVAL PASS YET</small>
+                <strong>Plan your arrival transport</strong>
+                <span>Add a flight or train pass in your Wallet or Itinerary</span>
+              </div>
+              <button onClick={() => setPlannerOpen("item")} style={{ marginLeft: "auto" }}>Add Activity <span>→</span></button>
             </div>
-            <div className="flight-time"><strong>8:40 AM</strong><span className="on-time">On time</span></div>
-            <button onClick={() => setPlannerOpen("flight")}>View details <span>→</span></button>
-          </div>
+          )}
 
           {/* MAIN DYNAMIC VIEW NAVIGATION */}
           {activeNav === "Overview" && (
-            <div className="view-grid">
+            <div className="view-grid view-fade">
               <div className="overview-cards">
                 <div className="overview-card">
                   <small>ITINERARY DURATION</small>
@@ -689,12 +1049,12 @@ export default function Home() {
                 <aside className="right-rail">
                   <section className="weather-card" onClick={() => setPlannerOpen("weather")} style={{ cursor: "pointer" }}>
                     <div>
-                      <small>ZÜRICH · SAT 12</small>
-                      <strong>18°</strong>
-                      <span>Partly cloudy (Click for 5-Day)</span>
+                      <small>{dynamicWeatherForecast.destination.toUpperCase()} · {dynamicWeatherForecast.days[0]?.day || "DAY 1"}</small>
+                      <strong>{dynamicWeatherForecast.days[0]?.temp || "18°C"}</strong>
+                      <span>{dynamicWeatherForecast.days[0]?.desc || "Partly cloudy"} (Click for 5-Day)</span>
                     </div>
-                    <div className="sun-cloud"><i>☀</i><b>☁</b></div>
-                    <div className="weather-meta"><span>H 20°</span><span>L 11°</span><span>Rain 10%</span></div>
+                    <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "☀"}</i><b>☁</b></div>
+                    <div className="weather-meta"><span>H {parseInt(dynamicWeatherForecast.days[0]?.temp || "20") + 2}°</span><span>L {parseInt(dynamicWeatherForecast.days[0]?.temp || "11") - 5}°</span><span>Rain {dynamicWeatherForecast.days[0]?.rain || "10%"}</span></div>
                   </section>
 
                   <section className="expense-card">
@@ -708,7 +1068,7 @@ export default function Home() {
           )}
 
           {activeNav === "Itinerary" && (
-            <div className="dashboard-grid">
+            <div className="dashboard-grid view-fade">
               <section className="itinerary-panel">
                 <div className="section-heading">
                   <div><span>YOUR ITINERARY</span><h2>Day by day</h2></div>
@@ -780,12 +1140,12 @@ export default function Home() {
               <aside className="right-rail">
                 <section className="weather-card" onClick={() => setPlannerOpen("weather")} style={{ cursor: "pointer" }}>
                   <div>
-                    <small>ZÜRICH · SAT 12</small>
-                    <strong>18°</strong>
-                    <span>Partly cloudy (Forecast)</span>
+                    <small>{dynamicWeatherForecast.destination.toUpperCase()} · {dynamicWeatherForecast.days[0]?.day || "DAY 1"}</small>
+                    <strong>{dynamicWeatherForecast.days[0]?.temp || "18°C"}</strong>
+                    <span>{dynamicWeatherForecast.days[0]?.desc || "Partly cloudy"} (Click for 5-Day)</span>
                   </div>
-                  <div className="sun-cloud"><i>☀</i><b>☁</b></div>
-                  <div className="weather-meta"><span>H 20°</span><span>L 11°</span><span>Rain 10%</span></div>
+                  <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "☀"}</i><b>☁</b></div>
+                  <div className="weather-meta"><span>H {parseInt(dynamicWeatherForecast.days[0]?.temp || "20") + 2}°</span><span>L {parseInt(dynamicWeatherForecast.days[0]?.temp || "11") - 5}°</span><span>Rain {dynamicWeatherForecast.days[0]?.rain || "10%"}</span></div>
                 </section>
 
                 <section className="expense-card">
@@ -796,16 +1156,13 @@ export default function Home() {
                   <strong className="expense-total">CHF {totalExpenseAmount.toFixed(2)}</strong>
                   <small>Total spent so far</small>
                   <div className="balances">
-                    <div>
-                      <span className="avatar avatar-me">MS</span>
-                      <p><strong>You</strong><small>are owed</small></p>
-                      <b className="positive">+ CHF 86.40</b>
-                    </div>
-                    <div>
-                      <span className="avatar peach">AL</span>
-                      <p><strong>Amelia</strong><small>owes you</small></p>
-                      <b>CHF 42.20</b>
-                    </div>
+                    {expenseBalances.slice(0, 2).map((person) => (
+                      <div key={person.email}>
+                        <span className={`avatar ${person.bg}`}>{person.avatar}</span>
+                        <p><strong>{person.name.split(" ")[0]}</strong><small>{person.balance >= 0 ? "is owed" : "owes"}</small></p>
+                        <b className={person.balance >= 0 ? "positive" : "negative"}>{person.balance >= 0 ? "+" : "-"} CHF {Math.abs(person.balance).toFixed(2)}</b>
+                      </div>
+                    ))}
                   </div>
                   <button className="text-link" onClick={() => setActiveNav("Expenses")}>View all balances <span>→</span></button>
                 </section>
@@ -835,20 +1192,16 @@ export default function Home() {
           )}
 
           {activeNav === "Map" && (
-            <div className="map-view-container">
+            <div className="map-view-container view-fade">
               <div className="section-heading">
                 <div><span>INTERACTIVE TRIP MAP</span><h2>Route & Destinations</h2></div>
+                <button onClick={() => setPlannerOpen("map-pin")}>＋ Add Pin</button>
               </div>
 
               <div className="map-canvas">
                 <div className="map-route-line" />
                 <div className="map-pins">
-                  {[
-                    { name: "Zürich", code: "ZRH", desc: "Arrival & Old Town", temp: "18°C" },
-                    { name: "Interlaken", code: "INT", desc: "Alpine Lakes & Funicular", temp: "16°C" },
-                    { name: "Lauterbrunnen", code: "LTB", desc: "Waterfalls & Valley Trail", temp: "15°C" },
-                    { name: "Zermatt", code: "ZMT", desc: "Matterhorn Peak", temp: "12°C" },
-                  ].map((pin) => (
+                  {mapPins.map((pin) => (
                     <div className="map-pin" key={pin.name} onClick={() => setSelectedMapPin(pin.name)}>
                       <div className="pin-bubble" style={{ background: selectedMapPin === pin.name ? "#ef7159" : "#17212b" }}>
                         {pin.code}
@@ -862,13 +1215,12 @@ export default function Home() {
               <div style={{ marginTop: "24px", background: "white", padding: "20px", borderRadius: "10px", border: "1px solid var(--line)" }}>
                 <h3 style={{ margin: "0 0 8px", fontFamily: "Georgia, serif" }}>Destination Focus: {selectedMapPin}</h3>
                 <p style={{ margin: "0 0 14px", fontSize: "11px", color: "#64748b" }}>
-                  {selectedMapPin === "Zürich" && "Switzerland’s vibrant cultural hub with picturesque lakeside promenades, historic Lindenhof, and world-class cafés."}
-                  {selectedMapPin === "Interlaken" && "Nestled between Lake Thun and Lake Brienz, the gateway to alpine adventure and the Harder Kulm funicular."}
-                  {selectedMapPin === "Lauterbrunnen" && "The valley of 72 waterfalls, featuring the famous Staubbach Falls and stunning hiking routes."}
-                  {selectedMapPin === "Zermatt" && "Car-free mountain resort village below the iconic Matterhorn peak."}
+                  {mapPins.find((p) => p.name === selectedMapPin)?.desc || `Explore highlights, activities, and dining in ${selectedMapPin}.`}
                 </p>
-                <div style={{ display: "flex", gap: "10px" }}>
-                  <button className="primary-action" style={{ width: "auto", padding: "8px 16px" }} onClick={() => notify(`Route to ${selectedMapPin} saved to offline maps`)}>Save Destination Map</button>
+                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                  <button className="primary-action" style={{ width: "auto", padding: "8px 16px" }} onClick={() => toggleSavePinOffline(selectedMapPin)}>
+                    {mapPins.find((p) => p.name === selectedMapPin)?.savedOffline ? "✓ Saved Offline" : "Save Map Offline"}
+                  </button>
                   <button className="secondary-action" style={{ width: "auto", margin: 0, padding: "8px 16px" }} onClick={() => setActiveNav("Itinerary")}>View Day Plans</button>
                 </div>
               </div>
@@ -876,7 +1228,7 @@ export default function Home() {
           )}
 
           {activeNav === "Expenses" && (
-            <div className="expenses-view-container">
+            <div className="expenses-view-container view-fade">
               <div>
                 <div className="section-heading">
                   <div><span>GROUP EXPENSES</span><h2>All Transactions</h2></div>
@@ -885,15 +1237,17 @@ export default function Home() {
 
                 <div className="expense-list">
                   {expenses.map((exp) => (
-                    <div className="expense-item-row" key={exp.id}>
+                    <div className="expense-item-row" key={exp.id} style={{ opacity: exp.settled ? 0.6 : 1 }}>
                       <div className="expense-item-info">
-                        <strong>{exp.description}</strong>
+                        <strong>
+                          {exp.description} {exp.settled && <span style={{ fontSize: "10px", background: "#e2e8f0", color: "#475569", padding: "2px 6px", borderRadius: "4px", marginLeft: "6px", fontWeight: "normal" }}>Settled</span>}
+                        </strong>
                         <small>Paid by {exp.paidBy} · {exp.date} · {exp.category}</small>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
                         <div className="expense-item-amount">
                           {exp.currency} {exp.amount.toFixed(2)}
-                          <small>Split 4 ways</small>
+                          <small>Split {travelersList.length} ways</small>
                         </div>
                         <button style={{ border: 0, background: "transparent", color: "#e53e3e", cursor: "pointer", fontSize: "14px" }} onClick={() => deleteExpense(exp.id)}>×</button>
                       </div>
@@ -909,36 +1263,23 @@ export default function Home() {
                   <small>Total spent across all categories</small>
 
                   <div className="balances" style={{ marginTop: "16px" }}>
-                    <div>
-                      <span className="avatar avatar-me">MS</span>
-                      <p><strong>You (Manav)</strong><small>Paid total CHF {(expenses.filter(e => e.paidBy === "Manav").reduce((a,b)=>a+b.amount,0)).toFixed(2)}</small></p>
-                      <b className="positive">+ CHF 86.40</b>
-                    </div>
-                    <div>
-                      <span className="avatar peach">AL</span>
-                      <p><strong>Amelia</strong><small>Paid total CHF {(expenses.filter(e => e.paidBy === "Amelia").reduce((a,b)=>a+b.amount,0)).toFixed(2)}</small></p>
-                      <b>Owes CHF 42.20</b>
-                    </div>
-                    <div>
-                      <span className="avatar blue">NK</span>
-                      <p><strong>Noah</strong><small>Paid total CHF {(expenses.filter(e => e.paidBy === "Noah").reduce((a,b)=>a+b.amount,0)).toFixed(2)}</small></p>
-                      <b>Owes CHF 22.10</b>
-                    </div>
-                    <div>
-                      <span className="avatar green">RP</span>
-                      <p><strong>Riya</strong><small>Paid total CHF 0.00</small></p>
-                      <b>Owes CHF 22.10</b>
-                    </div>
+                    {expenseBalances.map((person) => (
+                      <div key={person.email}>
+                        <span className={`avatar ${person.bg}`}>{person.avatar}</span>
+                        <p><strong>{person.name}</strong><small>Paid total CHF {person.paid.toFixed(2)}</small></p>
+                        <b className={person.balance >= 0 ? "positive" : "negative"}>{person.balance >= 0 ? "+" : "-"} CHF {Math.abs(person.balance).toFixed(2)}</b>
+                      </div>
+                    ))}
                   </div>
 
-                  <button className="primary-action" style={{ marginTop: "16px" }} onClick={() => notify("Settlement request sent to group members!")}>Settle Balances</button>
+                  <button className="primary-action" style={{ marginTop: "16px" }} onClick={() => setPlannerOpen("settle")}>Settle Balances</button>
                 </section>
               </aside>
             </div>
           )}
 
           {activeNav === "Wallet" && (
-            <div className="wallet-view">
+            <div className="wallet-view view-fade">
               <div className="section-heading">
                 <div><span>TRIP WALLET</span><h2>Tickets, Passes & Documents</h2></div>
                 <button onClick={() => setPlannerOpen("pass")}>＋ Add Pass</button>
@@ -1049,18 +1390,12 @@ export default function Home() {
           <section className="modal" onMouseDown={(e) => e.stopPropagation()}>
             <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
             <span className="eyebrow">5-DAY WEATHER FORECAST</span>
-            <h2>Zürich & Interlaken</h2>
+            <h2>{dynamicWeatherForecast.destination} & Region</h2>
             <div style={{ display: "grid", gap: "10px", marginBottom: "20px" }}>
-              {[
-                { day: "Sat Sep 12", temp: "18°C", desc: "Partly Cloudy", rain: "10%" },
-                { day: "Sun Sep 13", temp: "21°C", desc: "Sunny", rain: "0%" },
-                { day: "Mon Sep 14", temp: "17°C", desc: "Light Showers", rain: "40%" },
-                { day: "Tue Sep 15", temp: "16°C", desc: "Clear Mountain Air", rain: "5%" },
-                { day: "Wed Sep 16", temp: "19°C", desc: "Mostly Sunny", rain: "15%" },
-              ].map((w) => (
+              {dynamicWeatherForecast.days.map((w) => (
                 <div key={w.day} style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#f8fafc", borderRadius: "6px", fontSize: "10px" }}>
                   <strong>{w.day}</strong>
-                  <span>{w.desc} ({w.temp})</span>
+                  <span>{w.icon} {w.desc} ({w.temp})</span>
                   <small style={{ color: "#64748b" }}>Rain {w.rain}</small>
                 </div>
               ))}
@@ -1076,9 +1411,9 @@ export default function Home() {
           <section className="modal" onMouseDown={(e) => e.stopPropagation()}>
             <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
             <span className="eyebrow">TRAVEL TEAM</span>
-            <h2>Manage Trip Travelers</h2>
+            <h2>Manage Trip Travelers ({travelersList.length})</h2>
             
-            <div style={{ display: "grid", gap: "10px", marginBottom: "20px" }}>
+            <div style={{ display: "grid", gap: "10px", marginBottom: "20px", maxHeight: "220px", overflowY: "auto" }}>
               {travelersList.map((t) => (
                 <div key={t.email} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", background: "#f8fafc", padding: "10px", borderRadius: "8px" }}>
                   <span className={`avatar ${t.bg}`}>{t.avatar}</span>
@@ -1086,11 +1421,23 @@ export default function Home() {
                     <strong style={{ fontSize: "11px", display: "block" }}>{t.name}</strong>
                     <small style={{ fontSize: "9px", color: "#64748b" }}>{t.email} · {t.role}</small>
                   </div>
+                  {travelersList.length > 1 && (
+                    <button style={{ border: 0, background: "transparent", color: "#e53e3e", cursor: "pointer", fontSize: "13px" }} onClick={() => removeTraveler(t.email)} title="Remove traveler">×</button>
+                  )}
                 </div>
               ))}
             </div>
 
-            <button className="primary-action" onClick={() => {
+            <form onSubmit={(e) => { addTravelerSubmit(e); }} style={{ background: "#f1f5f9", padding: "12px", borderRadius: "8px", marginBottom: "16px", display: "grid", gap: "8px" }}>
+              <strong style={{ fontSize: "11px" }}>＋ Invite New Traveler</strong>
+              <div className="form-row">
+                <input name="name" placeholder="Full Name" required style={{ fontSize: "11px", padding: "6px" }} />
+                <input name="email" type="email" placeholder="Email Address" required style={{ fontSize: "11px", padding: "6px" }} />
+              </div>
+              <button className="primary-action" style={{ margin: 0, padding: "6px 12px", fontSize: "11px" }}>Add to Team</button>
+            </form>
+
+            <button className="secondary-action" onClick={() => {
               navigator.clipboard.writeText(window.location.href);
               notify("Trip invite link copied to clipboard!");
             }}>
@@ -1157,7 +1504,7 @@ export default function Home() {
       )}
 
       {/* Existing Dynamic Modals: Trip, Day, Item, Expense, Pass */}
-      {plannerOpen && !["flight", "weather", "travelers", "edit-day", "edit-item"].includes(plannerOpen) && (
+      {plannerOpen && !["flight", "weather", "travelers", "edit-day", "edit-item", "trip-switcher", "map-pin", "settle"].includes(plannerOpen) && (
         <div className="modal-backdrop" onMouseDown={() => setPlannerOpen(null)}>
           <section className="modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
             <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
@@ -1229,6 +1576,67 @@ export default function Home() {
                 <button className="primary-action">Save to Trip Wallet</button>
               </form>
             )}
+          </section>
+        </div>
+      )}
+
+      {/* Trip Switcher Modal */}
+      {plannerOpen === "trip-switcher" && (
+        <div className="modal-backdrop" onMouseDown={() => setPlannerOpen(null)}>
+          <section className="modal" onMouseDown={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
+            <span className="eyebrow">YOUR ITINERARIES</span>
+            <h2>Switch or Manage Trips</h2>
+            <div style={{ display: "grid", gap: "10px", marginBottom: "20px", maxHeight: "280px", overflowY: "auto" }}>
+              {savedTrips.map((t) => (
+                <div key={t.id} onClick={() => { setActiveTripId(t.id); setActiveDay(0); setPlannerOpen(null); notify(`Switched to "${t.name}"`); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", background: activeTripId === t.id ? "#fff7ed" : "#f8fafc", border: activeTripId === t.id ? "1.5px solid var(--coral)" : "1px solid var(--line)", borderRadius: "8px", cursor: "pointer" }}>
+                  <div>
+                    <strong style={{ fontSize: "13px", display: "block", color: activeTripId === t.id ? "var(--coral)" : "#0f172a" }}>{t.name} {activeTripId === t.id && "(Active)"}</strong>
+                    <small style={{ fontSize: "10px", color: "#64748b" }}>{t.route} · {t.days.length} Days · {t.travelersCount} Travelers</small>
+                  </div>
+                  <b style={{ fontSize: "16px", color: activeTripId === t.id ? "var(--coral)" : "#cbd5e1" }}>›</b>
+                </div>
+              ))}
+            </div>
+            <button className="primary-action" onClick={() => setPlannerOpen("trip")}>＋ Create New Trip</button>
+          </section>
+        </div>
+      )}
+
+      {/* Add Map Pin Modal */}
+      {plannerOpen === "map-pin" && (
+        <div className="modal-backdrop" onMouseDown={() => setPlannerOpen(null)}>
+          <section className="modal" onMouseDown={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
+            <form onSubmit={addMapPinSubmit}>
+              <span className="eyebrow">NEW DESTINATION</span>
+              <h2>Add Map Pin</h2>
+              <label>Place Name<input name="name" placeholder="e.g. Lucerne" required autoFocus /></label>
+              <div className="form-row">
+                <label>Code (3 chars)<input name="code" placeholder="e.g. LCR" maxLength={3} required /></label>
+                <label>Expected Temp<input name="temp" defaultValue="18°C" required /></label>
+              </div>
+              <label>Description<input name="desc" placeholder="e.g. Chapel Bridge & Old Town" required /></label>
+              <button className="primary-action">Add Pin to Map</button>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {/* Settle Balances Modal */}
+      {plannerOpen === "settle" && (
+        <div className="modal-backdrop" onMouseDown={() => setPlannerOpen(null)}>
+          <section className="modal" onMouseDown={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
+            <span className="eyebrow">DEBT SETTLEMENT</span>
+            <h2>Settle All Group Expenses</h2>
+            <p style={{ fontSize: "12px", color: "#475569", lineHeight: 1.5, marginBottom: "16px" }}>
+              This will mark all current group transactions as settled and zero out the per-person balance calculations for <strong>{tripName}</strong>.
+            </p>
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button className="primary-action" onClick={settleAllBalances}>Confirm & Zero Balances</button>
+              <button className="secondary-action" style={{ margin: 0 }} onClick={() => setPlannerOpen(null)}>Cancel</button>
+            </div>
           </section>
         </div>
       )}

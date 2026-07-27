@@ -1,6 +1,9 @@
-// Firebase Authentication & Firestore Service for JourneySync
-// Wraps the real Firebase SDK behind the same interface the app already uses.
-// Config comes from NEXT_PUBLIC_FIREBASE_* env vars (see .env.local.example).
+// Firebase Authentication & Firestore service for JourneySync.
+//
+// Keep every public value as a direct NEXT_PUBLIC_* reference. Vinext/Vite
+// replaces these references in the browser bundle at build time; dynamically
+// indexing process.env or import.meta.env leaves the deployed app with the
+// placeholder values instead.
 
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import {
@@ -37,41 +40,76 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
-const isConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
-const CONFIG_ERROR =
-  "Firebase is not configured. Copy .env.local.example to .env.local, fill in your Firebase project credentials, and restart the dev server.";
+const requiredConfig = {
+  apiKey: firebaseConfig.apiKey,
+  authDomain: firebaseConfig.authDomain,
+  projectId: firebaseConfig.projectId,
+  appId: firebaseConfig.appId,
+};
 
-// Only touch the Firebase SDK in the browser: this module is imported by a
-// "use client" component, but that component's initial render still happens
-// server-side, where window/indexedDB aren't available.
+const invalidConfigKeys = Object.entries(requiredConfig)
+  .filter(([, value]) => {
+    if (!value) return true;
+    const normalized = value.toLowerCase();
+    return (
+      normalized.includes("yourapikeyhere") ||
+      normalized.includes("your-app") ||
+      normalized.includes("your-project")
+    );
+  })
+  .map(([key]) => key);
+
+const CONFIG_ERROR =
+  invalidConfigKeys.length > 0
+    ? `Firebase configuration is missing or still contains placeholders: ${invalidConfigKeys.join(", ")}. Update .env.local and rebuild the app.`
+    : "Firebase could not be initialized in this browser.";
+
 let app: FirebaseApp | undefined;
 let authInstance: Auth | undefined;
 let dbInstance: Firestore | undefined;
+let initializationError: unknown;
 
+// A client component is also rendered on the server. Initialize the browser
+// SDK only in the browser, where Firebase Auth persistence and popup flows live.
 if (typeof window !== "undefined") {
-  if (isConfigured) {
-    app = getApps().length ? getApp() : initializeApp(firebaseConfig);
-    authInstance = getAuth(app);
-    dbInstance = getFirestore(app);
+  if (invalidConfigKeys.length === 0) {
+    try {
+      app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+      authInstance = getAuth(app);
+      dbInstance = getFirestore(app);
+    } catch (error) {
+      initializationError = error;
+      console.error("Firebase initialization failed:", error);
+    }
   } else {
     console.error(CONFIG_ERROR);
   }
 }
 
+// These exports retain the Firebase-shaped API used by the page. The wrapper
+// functions below validate initialization before using either value.
 export const auth = authInstance as Auth;
 export const db = dbInstance as Firestore;
 export const googleProvider = new GoogleAuthProvider();
 
 function requireAuth(): Auth {
-  if (!authInstance) throw new Error(CONFIG_ERROR);
-  return authInstance;
+  if (authInstance) return authInstance;
+  if (initializationError instanceof Error) {
+    throw new Error(`Firebase initialization failed: ${initializationError.message}`);
+  }
+  throw new Error(CONFIG_ERROR);
 }
 
 function requireDb(): Firestore {
-  if (!dbInstance) throw new Error(CONFIG_ERROR);
-  return dbInstance;
+  if (dbInstance) return dbInstance;
+  if (initializationError instanceof Error) {
+    throw new Error(`Firebase initialization failed: ${initializationError.message}`);
+  }
+  throw new Error(CONFIG_ERROR);
 }
 
 function toUser(firebaseUser: FirebaseAuthUser | null): User | null {
@@ -106,7 +144,6 @@ export async function signInWithPopup(_auth: Auth, provider: GoogleAuthProvider)
   return toUser(credential.user)!;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for API-compat with real Firebase's signOut(auth) signature
 export async function signOut(_auth: Auth) {
   await firebaseSignOut(requireAuth());
 }
