@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">JourneySync</string>
-    <string name="launch_url">https://journeysync-travel.manavdesai53.chatgpt.site/</string>
+    <string name="app_tagline">Every plan. Every person. One journey.</string>
+    <string name="google_web_client_id">1023637394063-0221ka1qlp1eo360qhoopht0t94087s3.apps.googleusercontent.com</string>
 </resources>
