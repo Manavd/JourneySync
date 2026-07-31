@@ -293,6 +293,55 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
 .wallet-doc-actions button { border: 0; background: transparent; color: var(--coral); font-size: 9px; font-weight: 700; cursor: pointer; transition: color 0.15s; }
 .wallet-doc-actions button:hover { color: #c44a35; }
 
+/* Flight tracker */
+.flight-tracker { display: grid; gap: 22px; }
+.tracker-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
+.tracker-heading h2 { font-family: Georgia, serif; font-size: 30px; font-weight: 500; margin: 7px 0 6px; }
+.tracker-heading p, .tracker-note, .modal-copy { color: #6f7c84; font-size: 10px; line-height: 1.55; margin: 0; }
+.tracker-add { width: auto; padding-inline: 18px; white-space: nowrap; }
+.flight-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; }
+.flight-tracker-card { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 20px; box-shadow: 0 8px 28px rgba(27,39,49,.045); }
+.flight-card-topline, .flight-card-footer, .flight-modal-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.flight-card-topline > div span, .flight-card-topline > div strong { display: block; }
+.flight-card-topline > div span { color: #7b8990; font-size: 7px; font-weight: 800; letter-spacing: .14em; }
+.flight-card-topline > div strong { font-family: Georgia, serif; font-size: 20px; margin-top: 3px; }
+.flight-status { border-radius: 999px; padding: 6px 10px; font-size: 8px; font-weight: 800; white-space: nowrap; }
+.flight-status.on-time { color: #2f7a4c; background: #e5f3e9; }
+.flight-status.delayed { color: #a45125; background: #fff0de; }
+.flight-route { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 17px; margin: 24px 0; }
+.flight-route > div:not(.route-path) strong, .flight-route > div:not(.route-path) span { display: block; }
+.flight-route > div:not(.route-path) strong { font-family: Georgia, serif; font-size: 29px; }
+.flight-route > div:not(.route-path) span { color: #7b8990; font-size: 9px; margin-top: 4px; }
+.flight-route > div:last-child { text-align: right; }
+.route-path { height: 1px; background: repeating-linear-gradient(90deg,#a9b5bb 0 6px,transparent 6px 11px); position: relative; }
+.route-path span { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); background: var(--paper); padding: 0 7px; color: var(--coral); font-size: 16px; }
+.flight-facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 14px 0; border-block: 1px solid var(--line); }
+.flight-facts small, .flight-facts strong { display: block; }
+.flight-facts small { color: #8a969c; font-size: 7px; font-weight: 800; letter-spacing: .08em; margin-bottom: 5px; }
+.flight-facts strong { font-size: 9px; }
+.delay-text { color: #b35a2b; }
+.flight-card-footer { padding-top: 14px; }
+.flight-card-footer > span { color: #89949a; font-size: 8px; }
+.flight-card-footer button { border: 0; background: transparent; color: var(--coral); cursor: pointer; font-size: 9px; font-weight: 800; }
+.flight-empty { min-height: 300px; border: 1px dashed #c7c9c6; border-radius: 12px; display: grid; place-items: center; align-content: center; gap: 10px; text-align: center; padding: 30px; background: rgba(255,253,248,.5); }
+.flight-empty > span { color: var(--coral); font-size: 30px; }
+.flight-empty h3 { font-family: Georgia, serif; font-size: 22px; font-weight: 500; margin: 0; }
+.flight-empty p { color: #76838a; font-size: 10px; max-width: 360px; line-height: 1.5; margin: 0 0 8px; }
+.tracker-note { padding-left: 2px; }
+.flight-modal { width: min(520px, 100%); }
+.flight-modal-title h2 { margin-bottom: 18px; }
+.flight-modal-route { display: grid; grid-template-columns: 1fr auto 1fr; gap: 18px; align-items: center; border-radius: 9px; background: #f2f5f5; padding: 17px; margin-bottom: 16px; text-align: center; }
+.flight-modal-route div strong, .flight-modal-route div span { display: block; }
+.flight-modal-route div strong { font-family: Georgia, serif; font-size: 25px; }
+.flight-modal-route div span { color: #7d898f; font-size: 8px; margin-top: 4px; }
+.flight-modal-route > span { color: var(--coral); font-size: 18px; }
+.flight-detail-list { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 18px; }
+.flight-detail-list > div { background: var(--paper); padding: 12px; }
+.flight-detail-list span, .flight-detail-list strong { display: block; }
+.flight-detail-list span { color: #839097; font-size: 7px; font-weight: 800; letter-spacing: .08em; margin-bottom: 4px; text-transform: uppercase; }
+.flight-detail-list strong { font-size: 10px; }
+.flight-edit-modal { width: min(560px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; }
+
 /* Context Menu / Dropdown */
 .dropdown-menu { position: absolute; right: 0; top: 100%; margin-top: 6px; background: white; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); z-index: 30; width: 160px; padding: 4px; animation: popover-fade 0.12s ease-out; }
 .dropdown-item { width: 100%; border: 0; background: transparent; text-align: left; padding: 8px 12px; font-size: 10px; font-weight: 600; color: #334155; border-radius: 4px; cursor: pointer; transition: background 0.1s; }
@@ -350,6 +399,10 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
   .event-card em { display: none; }
   .section-heading h2 { font-size: 23px; }
   h1 { font-size: 42px; }
+  .tracker-heading { align-items: start; flex-direction: column; }
+  .tracker-add { width: 100%; }
+  .flight-card-grid { grid-template-columns: 1fr; }
+  .flight-facts { grid-template-columns: 1fr 1fr; row-gap: 14px; }
 }
 
 @media (max-width: 420px) {
@@ -358,6 +411,10 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
   .status-banner { grid-template-columns: 38px 1fr; }
   .flight-time { display: none; }
   .event-card small { line-height: 1.45; }
+  .flight-tracker-card { padding: 16px; }
+  .flight-detail-list { grid-template-columns: 1fr; }
+  .flight-modal-title { align-items: start; flex-direction: column; margin-bottom: 15px; }
+  .flight-modal-title h2 { margin-bottom: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -23,6 +23,22 @@ type DayEvent = {
   meta: string;
   kind: "flight" | "stay" | "food" | "train" | "activity";
   status?: string;
+  flight?: {
+    number: string;
+    airline: string;
+    origin: string;
+    destination: string;
+    departureTerminal: string;
+    arrivalTerminal: string;
+    gate: string;
+    scheduledDeparture: string;
+    estimatedDeparture: string;
+    scheduledArrival: string;
+    estimatedArrival: string;
+    delayMinutes: number;
+    baggageClaim: string;
+    lastUpdated: string;
+  };
 };
 
 type Day = {
@@ -96,6 +112,22 @@ const initialDays: Day[] = [
         meta: "LX 017 · Terminal 2 · Gate E52",
         kind: "flight",
         status: "On time",
+        flight: {
+          number: "LX 017",
+          airline: "SWISS",
+          origin: "JFK",
+          destination: "ZRH",
+          departureTerminal: "1",
+          arrivalTerminal: "2",
+          gate: "E52",
+          scheduledDeparture: "8:40 PM",
+          estimatedDeparture: "8:40 PM",
+          scheduledArrival: "10:15 AM (+1)",
+          estimatedArrival: "10:15 AM (+1)",
+          delayMinutes: 0,
+          baggageClaim: "Carousel 24",
+          lastUpdated: "Just now",
+        },
       },
       {
         id: "ev-2",
@@ -390,7 +422,7 @@ export default function Home() {
   const [synced, setSynced] = useState(true);
   const [toast, setToast] = useState("");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [plannerOpen, setPlannerOpen] = useState<"trip" | "day" | "item" | "edit-item" | "edit-day" | "expense" | "pass" | "flight" | "weather" | "travelers" | "trip-switcher" | "map-pin" | "settle" | null>(null);
+  const [plannerOpen, setPlannerOpen] = useState<"trip" | "day" | "item" | "edit-item" | "edit-day" | "expense" | "pass" | "flight" | "flight-edit" | "track-flight" | "weather" | "travelers" | "trip-switcher" | "map-pin" | "settle" | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<DayEvent | null>(null);
   const [dayDropdownOpen, setDayDropdownOpen] = useState(false);
   const [selectedMapPin, setSelectedMapPin] = useState<string>(() => mapPins[0]?.name || "Zürich");
@@ -519,12 +551,27 @@ export default function Home() {
   const mainArrivalEvent = useMemo(() => {
     for (const d of itineraryDays) {
       const found = d.events.find(e => e.kind === "flight" || e.kind === "train");
-      if (found) return { title: found.title, meta: found.meta, time: found.time, status: found.status || "Planned", kind: found.kind };
+      if (found) return { title: found.title, meta: found.meta, time: found.time, status: found.status || "Planned", kind: found.kind, event: found };
     }
     const docFound = walletDocs.find(w => w.title.toLowerCase().includes("flight") || w.title.toLowerCase().includes("boarding") || w.title.toLowerCase().includes("train") || w.meta.toLowerCase().includes("lx") || w.meta.toLowerCase().includes("air"));
-    if (docFound) return { title: docFound.title, meta: docFound.meta, time: "Check pass", status: "In Wallet", kind: "flight" as const };
+    if (docFound) return { title: docFound.title, meta: docFound.meta, time: "Check pass", status: "In Wallet", kind: "flight" as const, event: null };
     return null;
   }, [itineraryDays, walletDocs]);
+
+  const trackedFlights = useMemo(() => itineraryDays.flatMap((tripDay, dayIndex) =>
+    tripDay.events
+      .filter((event) => event.kind === "flight")
+      .map((event) => ({ event, tripDay, dayIndex })),
+  ), [itineraryDays]);
+
+  const selectedFlight = selectedEvent?.kind === "flight"
+    ? selectedEvent
+    : trackedFlights[0]?.event || null;
+
+  function openFlightDetails(flight: DayEvent | null) {
+    setSelectedEvent(flight);
+    setPlannerOpen("flight");
+  }
 
   function notify(message: string) {
     setToast(message);
@@ -662,6 +709,23 @@ export default function Home() {
     notify(`New itinerary "${name}" created!`);
   }
 
+  function deleteTrip(id: string, event: React.MouseEvent) {
+    event.stopPropagation();
+    if (!requireSignIn("delete a trip")) return;
+    if (savedTrips.length <= 1) {
+      notify("You must keep at least one itinerary!");
+      return;
+    }
+    const target = savedTrips.find((t) => t.id === id);
+    const newTrips = savedTrips.filter((t) => t.id !== id);
+    setSavedTrips(newTrips);
+    if (activeTripId === id && newTrips.length > 0) {
+      setActiveTripId(newTrips[0].id);
+      setActiveDay(0);
+    }
+    notify(`Itinerary "${target?.name || "Trip"}" deleted.`);
+  }
+
   function addDay(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!requireSignIn("add a day")) return;
@@ -760,6 +824,77 @@ export default function Home() {
     setPlannerOpen(null);
     setSelectedEvent(null);
     notify("Event updated!");
+  }
+
+  function saveFlightDetails(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requireSignIn("update flight details") || !selectedFlight?.id) return;
+    const form = new FormData(event.currentTarget);
+    const flight = {
+      number: String(form.get("number") || "Flight"),
+      airline: String(form.get("airline") || "Airline"),
+      origin: String(form.get("origin") || "ORG").toUpperCase(),
+      destination: String(form.get("destination") || "DST").toUpperCase(),
+      departureTerminal: String(form.get("departureTerminal") || "TBD"),
+      arrivalTerminal: String(form.get("arrivalTerminal") || "TBD"),
+      gate: String(form.get("gate") || "TBD").toUpperCase(),
+      scheduledDeparture: String(form.get("scheduledDeparture") || "TBD"),
+      estimatedDeparture: String(form.get("estimatedDeparture") || "TBD"),
+      scheduledArrival: String(form.get("scheduledArrival") || "TBD"),
+      estimatedArrival: String(form.get("estimatedArrival") || "TBD"),
+      delayMinutes: Math.max(0, Number(form.get("delayMinutes") || 0)),
+      baggageClaim: String(form.get("baggageClaim") || "TBD"),
+      lastUpdated: "Just now",
+    };
+    const status = String(form.get("status") || "Scheduled");
+    updateActiveTrip((trip) => ({
+      ...trip,
+      days: trip.days.map((tripDay) => ({
+        ...tripDay,
+        events: tripDay.events.map((item) => item.id === selectedFlight.id
+          ? { ...item, title: `${flight.airline} ${flight.number}`, time: flight.estimatedDeparture, meta: `${flight.origin} → ${flight.destination} · Gate ${flight.gate}`, status, flight }
+          : item),
+      })),
+    }));
+    setSelectedEvent((current) => current ? { ...current, title: `${flight.airline} ${flight.number}`, time: flight.estimatedDeparture, meta: `${flight.origin} → ${flight.destination} · Gate ${flight.gate}`, status, flight } : current);
+    setPlannerOpen("flight");
+    notify("Flight status updated");
+  }
+
+  function addTrackedFlight(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requireSignIn("track a flight")) return;
+    const form = new FormData(event.currentTarget);
+    const number = String(form.get("number") || "Flight").toUpperCase();
+    const airline = String(form.get("airline") || "Airline");
+    const origin = String(form.get("origin") || "ORG").toUpperCase();
+    const destination = String(form.get("destination") || "DST").toUpperCase();
+    const departure = formatTime(String(form.get("departure") || ""));
+    const arrival = formatTime(String(form.get("arrival") || ""));
+    const newFlight: DayEvent = {
+      id: `flight-${Date.now()}`,
+      time: departure,
+      title: `${airline} ${number}`,
+      meta: `${origin} → ${destination} · Gate TBD`,
+      kind: "flight",
+      status: "Scheduled",
+      flight: {
+        number, airline, origin, destination,
+        departureTerminal: "TBD", arrivalTerminal: "TBD", gate: "TBD",
+        scheduledDeparture: departure, estimatedDeparture: departure,
+        scheduledArrival: arrival, estimatedArrival: arrival,
+        delayMinutes: 0, baggageClaim: "TBD", lastUpdated: "Just now",
+      },
+    };
+    updateActiveTrip((trip) => ({
+      ...trip,
+      days: trip.days.map((tripDay, index) => index === activeDay
+        ? { ...tripDay, events: [...tripDay.events, newFlight] }
+        : tripDay),
+    }));
+    setSelectedEvent(newFlight);
+    setPlannerOpen("flight");
+    notify(`${number} added to your tracker`);
   }
 
   function deleteSelectedEvent() {
@@ -936,6 +1071,7 @@ export default function Home() {
           {[
             ["⌂", "Overview"],
             ["≡", "Itinerary"],
+            ["✈", "Flight Tracker"],
             ["◇", "Map"],
             ["¤", "Expenses"],
             ["▣", "Wallet"],
@@ -1083,7 +1219,7 @@ export default function Home() {
                 <span>START</span><i><b>{mainArrivalEvent.kind === "train" ? "↗" : "✈"}</b></i><span>DEST</span>
               </div>
               <div className="flight-time"><strong>{mainArrivalEvent.time}</strong><span className="on-time">{mainArrivalEvent.status}</span></div>
-              <button onClick={() => setPlannerOpen("flight")}>View details <span>→</span></button>
+              <button onClick={() => mainArrivalEvent.kind === "flight" ? openFlightDetails(mainArrivalEvent.event || null) : setActiveNav("Itinerary")}>View details <span>→</span></button>
             </div>
           ) : (
             <div className="status-banner" style={{ background: "#f8fafc", border: "1px dashed #cbd5e1" }}>
@@ -1168,6 +1304,59 @@ export default function Home() {
                   </section>
                 </aside>
               </div>
+            </div>
+          )}
+
+          {activeNav === "Flight Tracker" && (
+            <div className="flight-tracker view-fade">
+              <div className="tracker-heading">
+                <div>
+                  <span className="eyebrow">TRIP OPERATIONS</span>
+                  <h2>Flight Tracker</h2>
+                  <p>Gate, terminal, timing, delay, and baggage details stored with your itinerary.</p>
+                </div>
+                <button className="primary-action tracker-add" onClick={() => openMutationPanel("track-flight")}>＋ Track a flight</button>
+              </div>
+
+              {trackedFlights.length > 0 ? (
+                <div className="flight-card-grid">
+                  {trackedFlights.map(({ event, tripDay }) => {
+                    const details = event.flight;
+                    const delayed = (details?.delayMinutes || 0) > 0;
+                    return (
+                      <article className="flight-tracker-card" key={event.id || `${event.title}-${event.time}`}>
+                        <div className="flight-card-topline">
+                          <div><span>{details?.airline || "FLIGHT"}</span><strong>{details?.number || event.title}</strong></div>
+                          <span className={`flight-status ${delayed ? "delayed" : "on-time"}`}>{event.status || "Scheduled"}</span>
+                        </div>
+                        <div className="flight-route">
+                          <div><strong>{details?.origin || "ORG"}</strong><span>{details?.estimatedDeparture || event.time}</span></div>
+                          <div className="route-path"><span>✈</span></div>
+                          <div><strong>{details?.destination || "DST"}</strong><span>{details?.estimatedArrival || "TBD"}</span></div>
+                        </div>
+                        <div className="flight-facts">
+                          <div><small>GATE</small><strong>{details?.gate || "TBD"}</strong></div>
+                          <div><small>TERMINALS</small><strong>{details ? `${details.departureTerminal} → ${details.arrivalTerminal}` : "TBD"}</strong></div>
+                          <div><small>DELAY</small><strong className={delayed ? "delay-text" : ""}>{delayed ? `${details?.delayMinutes} min` : "None"}</strong></div>
+                          <div><small>BAGGAGE</small><strong>{details?.baggageClaim || "TBD"}</strong></div>
+                        </div>
+                        <div className="flight-card-footer">
+                          <span>{tripDay.short} {tripDay.date} · Updated {details?.lastUpdated || "when added"}</span>
+                          <button onClick={() => openFlightDetails(event)}>View details →</button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flight-empty">
+                  <span>✈</span>
+                  <h3>No flights tracked yet</h3>
+                  <p>Add a flight to the selected itinerary day and keep its travel-day details together.</p>
+                  <button className="primary-action tracker-add" onClick={() => openMutationPanel("track-flight")}>Track your first flight</button>
+                </div>
+              )}
+              <p className="tracker-note">Flight details are managed by your group. Live airline data requires a connected flight-data provider.</p>
             </div>
           )}
 
@@ -1486,17 +1675,110 @@ export default function Home() {
       {/* Flight Details Modal */}
       {plannerOpen === "flight" && (
         <div className="modal-backdrop" onMouseDown={() => setPlannerOpen(null)}>
-          <section className="modal" onMouseDown={(e) => e.stopPropagation()}>
+          <section className="modal flight-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Flight details">
             <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
             <span className="eyebrow">FLIGHT DETAILS</span>
-            <h2>SWISS LX 017</h2>
-            <div style={{ fontSize: "11px", display: "grid", gap: "10px", marginBottom: "20px" }}>
-              <div><strong>Departure:</strong> New York JFK (Terminal 1) · 8:40 AM</div>
-              <div><strong>Arrival:</strong> Zürich ZRH (Terminal 2) · 10:15 AM (+1)</div>
-              <div><strong>Gate:</strong> E52 · Seat 14A (Window)</div>
-              <div><strong>Status:</strong> <span style={{ color: "#3e9162", fontWeight: "bold" }}>On Time</span></div>
-            </div>
-            <button className="primary-action" onClick={() => setPlannerOpen(null)}>Close Flight Details</button>
+            {selectedFlight ? (
+              <>
+                <div className="flight-modal-title">
+                  <h2>{selectedFlight.flight?.airline || "Flight"} {selectedFlight.flight?.number || selectedFlight.title}</h2>
+                  <span className={`flight-status ${(selectedFlight.flight?.delayMinutes || 0) > 0 ? "delayed" : "on-time"}`}>{selectedFlight.status || "Scheduled"}</span>
+                </div>
+                <div className="flight-modal-route">
+                  <div><strong>{selectedFlight.flight?.origin || "ORG"}</strong><span>Terminal {selectedFlight.flight?.departureTerminal || "TBD"}</span></div>
+                  <span>✈</span>
+                  <div><strong>{selectedFlight.flight?.destination || "DST"}</strong><span>Terminal {selectedFlight.flight?.arrivalTerminal || "TBD"}</span></div>
+                </div>
+                <div className="flight-detail-list">
+                  <div><span>Scheduled departure</span><strong>{selectedFlight.flight?.scheduledDeparture || selectedFlight.time}</strong></div>
+                  <div><span>Estimated departure</span><strong>{selectedFlight.flight?.estimatedDeparture || selectedFlight.time}</strong></div>
+                  <div><span>Scheduled arrival</span><strong>{selectedFlight.flight?.scheduledArrival || "TBD"}</strong></div>
+                  <div><span>Estimated arrival</span><strong>{selectedFlight.flight?.estimatedArrival || "TBD"}</strong></div>
+                  <div><span>Gate</span><strong>{selectedFlight.flight?.gate || "TBD"}</strong></div>
+                  <div><span>Delay</span><strong>{selectedFlight.flight?.delayMinutes ? `${selectedFlight.flight.delayMinutes} minutes` : "No delay"}</strong></div>
+                  <div><span>Baggage claim</span><strong>{selectedFlight.flight?.baggageClaim || "TBD"}</strong></div>
+                  <div><span>Last updated</span><strong>{selectedFlight.flight?.lastUpdated || "Not yet updated"}</strong></div>
+                </div>
+                <button className="primary-action" onClick={() => {
+                  if (!requireSignIn("update flight details")) return;
+                  setPlannerOpen("flight-edit");
+                }}>Update Flight Details</button>
+                <button className="secondary-action" onClick={() => { setPlannerOpen(null); setActiveNav("Flight Tracker"); }}>Open Flight Tracker</button>
+              </>
+            ) : (
+              <>
+                <h2>No tracked flight</h2>
+                <p className="modal-copy">Add a flight to your itinerary to track its gate, schedule, and delay details.</p>
+                <button className="primary-action" onClick={() => openMutationPanel("track-flight")}>Track a flight</button>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+
+      {plannerOpen === "flight-edit" && selectedFlight && (
+        <div className="modal-backdrop" onMouseDown={() => setPlannerOpen(null)}>
+          <section className="modal flight-edit-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Update flight details">
+            <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
+            <form onSubmit={saveFlightDetails}>
+              <span className="eyebrow">UPDATE FLIGHT</span>
+              <h2>{selectedFlight.flight?.number || selectedFlight.title}</h2>
+              <div className="form-row">
+                <label>Airline<input name="airline" defaultValue={selectedFlight.flight?.airline || ""} required /></label>
+                <label>Flight number<input name="number" defaultValue={selectedFlight.flight?.number || ""} required /></label>
+              </div>
+              <div className="form-row">
+                <label>Origin<input name="origin" maxLength={3} defaultValue={selectedFlight.flight?.origin || ""} required /></label>
+                <label>Destination<input name="destination" maxLength={3} defaultValue={selectedFlight.flight?.destination || ""} required /></label>
+              </div>
+              <div className="form-row">
+                <label>Departure terminal<input name="departureTerminal" defaultValue={selectedFlight.flight?.departureTerminal || "TBD"} /></label>
+                <label>Arrival terminal<input name="arrivalTerminal" defaultValue={selectedFlight.flight?.arrivalTerminal || "TBD"} /></label>
+              </div>
+              <div className="form-row">
+                <label>Gate<input name="gate" defaultValue={selectedFlight.flight?.gate || "TBD"} /></label>
+                <label>Status<select name="status" defaultValue={selectedFlight.status || "Scheduled"}><option>Scheduled</option><option>On time</option><option>Boarding</option><option>Delayed</option><option>Departed</option><option>Landed</option><option>Cancelled</option></select></label>
+              </div>
+              <div className="form-row">
+                <label>Scheduled departure<input name="scheduledDeparture" defaultValue={selectedFlight.flight?.scheduledDeparture || selectedFlight.time} /></label>
+                <label>Estimated departure<input name="estimatedDeparture" defaultValue={selectedFlight.flight?.estimatedDeparture || selectedFlight.time} /></label>
+              </div>
+              <div className="form-row">
+                <label>Scheduled arrival<input name="scheduledArrival" defaultValue={selectedFlight.flight?.scheduledArrival || "TBD"} /></label>
+                <label>Estimated arrival<input name="estimatedArrival" defaultValue={selectedFlight.flight?.estimatedArrival || "TBD"} /></label>
+              </div>
+              <div className="form-row">
+                <label>Delay in minutes<input name="delayMinutes" type="number" min="0" defaultValue={selectedFlight.flight?.delayMinutes || 0} /></label>
+                <label>Baggage claim<input name="baggageClaim" defaultValue={selectedFlight.flight?.baggageClaim || "TBD"} /></label>
+              </div>
+              <button className="primary-action">Save Flight Status</button>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {plannerOpen === "track-flight" && (
+        <div className="modal-backdrop" onMouseDown={() => setPlannerOpen(null)}>
+          <section className="modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Track a flight">
+            <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
+            <form onSubmit={addTrackedFlight}>
+              <span className="eyebrow">FLIGHT TRACKER</span>
+              <h2>Add a flight</h2>
+              <p className="modal-copy">This flight will be added to Day {activeDay + 1} of {tripName}.</p>
+              <div className="form-row">
+                <label>Airline<input name="airline" placeholder="e.g. SWISS" required autoFocus /></label>
+                <label>Flight number<input name="number" placeholder="e.g. LX 017" required /></label>
+              </div>
+              <div className="form-row">
+                <label>Origin<input name="origin" placeholder="JFK" maxLength={3} required /></label>
+                <label>Destination<input name="destination" placeholder="ZRH" maxLength={3} required /></label>
+              </div>
+              <div className="form-row">
+                <label>Departure<input name="departure" type="time" required /></label>
+                <label>Arrival<input name="arrival" type="time" required /></label>
+              </div>
+              <button className="primary-action">Add to Flight Tracker</button>
+            </form>
           </section>
         </div>
       )}
@@ -1621,7 +1903,7 @@ export default function Home() {
       )}
 
       {/* Existing Dynamic Modals: Trip, Day, Item, Expense, Pass */}
-      {plannerOpen && !["flight", "weather", "travelers", "edit-day", "edit-item", "trip-switcher", "map-pin", "settle"].includes(plannerOpen) && (
+      {plannerOpen && !["flight", "flight-edit", "track-flight", "weather", "travelers", "edit-day", "edit-item", "trip-switcher", "map-pin", "settle"].includes(plannerOpen) && (
         <div className="modal-backdrop" onMouseDown={() => setPlannerOpen(null)}>
           <section className="modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
             <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
@@ -1711,7 +1993,19 @@ export default function Home() {
                     <strong style={{ fontSize: "13px", display: "block", color: activeTripId === t.id ? "var(--coral)" : "#0f172a" }}>{t.name} {activeTripId === t.id && "(Active)"}</strong>
                     <small style={{ fontSize: "10px", color: "#64748b" }}>{t.route} · {t.days.length} Days · {t.travelersCount} Travelers</small>
                   </div>
-                  <b style={{ fontSize: "16px", color: activeTripId === t.id ? "var(--coral)" : "#cbd5e1" }}>›</b>
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    {savedTrips.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={(e) => deleteTrip(t.id, e)}
+                        style={{ border: 0, background: "transparent", color: "#e53e3e", cursor: "pointer", fontSize: "16px", padding: "4px" }}
+                        title="Delete itinerary"
+                      >
+                        🗑
+                      </button>
+                    )}
+                    <b style={{ fontSize: "16px", color: activeTripId === t.id ? "var(--coral)" : "#cbd5e1" }}>›</b>
+                  </div>
                 </div>
               ))}
             </div>

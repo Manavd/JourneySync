@@ -145,6 +145,7 @@ export async function signInWithPopup(_auth: Auth, provider: GoogleAuthProvider)
 }
 
 export async function signOut(_auth: Auth) {
+  void _auth;
   await firebaseSignOut(requireAuth());
 }
 
