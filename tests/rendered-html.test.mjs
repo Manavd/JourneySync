@@ -32,4 +32,5 @@ test("server-renders the JourneySync travel application", async () => {
   assert.match(html, /Swiss Escape/i);
   assert.match(html, /Arrival in Zürich/i);
   assert.match(html, /Flight Tracker/i);
+  assert.match(html, /Guest Flights/i);
 });

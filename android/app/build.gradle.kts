@@ -29,6 +29,15 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -36,4 +45,6 @@ dependencies {
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
     implementation("com.google.android.gms:play-services-auth:21.3.0")
+    implementation("androidx.annotation:annotation:1.9.1")
+    testImplementation("junit:junit:4.13.2")
 }
