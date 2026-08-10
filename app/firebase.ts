@@ -22,6 +22,7 @@ import {
   doc as firestoreDoc,
   setDoc as firestoreSetDoc,
   getDoc as firestoreGetDoc,
+  onSnapshot as firestoreOnSnapshot,
   type Firestore,
   type DocumentReference,
   type SetOptions,
@@ -149,6 +150,12 @@ export async function signOut(_auth: Auth) {
   await firebaseSignOut(requireAuth());
 }
 
+export async function getIdToken(): Promise<string> {
+  const currentUser = requireAuth().currentUser;
+  if (!currentUser) throw new Error("Sign in to refresh live flight data.");
+  return currentUser.getIdToken();
+}
+
 export function doc(_db: Firestore, ...pathSegments: string[]): DocumentReference {
   return firestoreDoc(requireDb(), pathSegments.join("/"));
 }
@@ -159,4 +166,12 @@ export async function setDoc(docRef: DocumentReference, data: Record<string, unk
 
 export async function getDoc(docRef: DocumentReference) {
   return firestoreGetDoc(docRef);
+}
+
+export function onSnapshot(
+  docRef: DocumentReference,
+  onNext: (snapshot: Awaited<ReturnType<typeof firestoreGetDoc>>) => void,
+  onError?: (error: Error) => void,
+) {
+  return firestoreOnSnapshot(docRef, onNext, onError);
 }

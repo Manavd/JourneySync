@@ -12,9 +12,31 @@ import {
   onAuthStateChanged,
   doc,
   setDoc,
-  getDoc,
+  onSnapshot,
+  getIdToken,
   User 
 } from "./firebase";
+
+type FlightInfo = {
+  number: string;
+  airline: string;
+  origin: string;
+  destination: string;
+  departureDate?: string;
+  departureTerminal: string;
+  arrivalTerminal: string;
+  gate: string;
+  arrivalGate?: string;
+  scheduledDeparture: string;
+  estimatedDeparture: string;
+  scheduledArrival: string;
+  estimatedArrival: string;
+  delayMinutes: number;
+  baggageClaim: string;
+  lastUpdated: string;
+  lastUpdatedUtc?: string;
+  source?: string;
+};
 
 type DayEvent = {
   id?: string;
@@ -23,22 +45,7 @@ type DayEvent = {
   meta: string;
   kind: "flight" | "stay" | "food" | "train" | "activity";
   status?: string;
-  flight?: {
-    number: string;
-    airline: string;
-    origin: string;
-    destination: string;
-    departureTerminal: string;
-    arrivalTerminal: string;
-    gate: string;
-    scheduledDeparture: string;
-    estimatedDeparture: string;
-    scheduledArrival: string;
-    estimatedArrival: string;
-    delayMinutes: number;
-    baggageClaim: string;
-    lastUpdated: string;
-  };
+  flight?: FlightInfo;
 };
 
 type GuestFlight = {
@@ -46,7 +53,12 @@ type GuestFlight = {
   guestName: string;
   note: string;
   status: string;
-  flight: NonNullable<DayEvent["flight"]>;
+  flight: FlightInfo;
+};
+
+type LiveFlightUpdate = {
+  status: string;
+  flight: FlightInfo;
 };
 
 type Day = {
@@ -126,6 +138,7 @@ const initialDays: Day[] = [
           airline: "SWISS",
           origin: "JFK",
           destination: "ZRH",
+          departureDate: "2026-09-12",
           departureTerminal: "1",
           arrivalTerminal: "2",
           gate: "E52",
@@ -359,6 +372,11 @@ function friendlyAuthError(error: unknown): string {
   return "Firebase could not sign you in. Please try again.";
 }
 
+function friendlyFlightError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return "Live flight data could not be refreshed. Try again shortly.";
+}
+
 export default function Home() {
   // Navigation & User State
   const [activeNav, setActiveNav] = useState("Itinerary");
@@ -437,41 +455,48 @@ export default function Home() {
   const [plannerOpen, setPlannerOpen] = useState<"trip" | "day" | "item" | "edit-item" | "edit-day" | "expense" | "pass" | "flight" | "flight-edit" | "track-flight" | "guest-flight" | "weather" | "travelers" | "trip-switcher" | "map-pin" | "settle" | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<DayEvent | null>(null);
   const [selectedGuestFlight, setSelectedGuestFlight] = useState<GuestFlight | null>(null);
+  const [liveUpdating, setLiveUpdating] = useState<string | null>(null);
   const [dayDropdownOpen, setDayDropdownOpen] = useState(false);
   const [selectedMapPin, setSelectedMapPin] = useState<string>(() => mapPins[0]?.name || "Zürich");
 
   // Auth Listener & Firestore Sync
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    let unsubscribeCloud = () => {};
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      unsubscribeCloud();
+      unsubscribeCloud = () => {};
       setCloudReady(false);
       setUser(currentUser);
       setAuthChecking(false);
       if (currentUser) {
         setAuthError("");
         notify(`Welcome back, ${currentUser.displayName || currentUser.email}`);
-        // Load data from Firestore
-        try {
-          const docRef = doc(db, "users", currentUser.uid, "user_trips", "all_trips");
-          const snap = await getDoc(docRef);
+        const docRef = doc(db, "users", currentUser.uid, "user_trips", "all_trips");
+        unsubscribeCloud = onSnapshot(docRef, (snap) => {
           if (snap.exists()) {
             const data = snap.data();
             if (data && data.savedTrips && Array.isArray(data.savedTrips) && data.savedTrips.length > 0) {
-              setSavedTrips(data.savedTrips as Trip[]);
+              const incomingTrips = data.savedTrips as Trip[];
+              setSavedTrips((current) => JSON.stringify(current) === JSON.stringify(incomingTrips) ? current : incomingTrips);
               if (data.activeTripId) setActiveTripId(data.activeTripId as string);
             }
           }
-        } catch (error) {
+          setCloudReady(true);
+          setSynced(true);
+        }, (error) => {
           console.error("Could not load Firestore trip data:", error);
           setSynced(false);
           notify("Cloud data could not load. Your local copy is still available.");
-        } finally {
           setCloudReady(true);
-        }
+        });
       } else {
         setCloudReady(false);
       }
     });
-    return () => unsubscribe();
+    return () => {
+      unsubscribeCloud();
+      unsubscribe();
+    };
   }, []);
 
   // Sync to Firestore and LocalStorage whenever data changes
@@ -861,9 +886,11 @@ export default function Home() {
       airline: String(form.get("airline") || "Airline"),
       origin: String(form.get("origin") || "ORG").toUpperCase(),
       destination: String(form.get("destination") || "DST").toUpperCase(),
+      departureDate: String(form.get("departureDate") || ""),
       departureTerminal: String(form.get("departureTerminal") || "TBD"),
       arrivalTerminal: String(form.get("arrivalTerminal") || "TBD"),
       gate: String(form.get("gate") || "TBD").toUpperCase(),
+      arrivalGate: String(form.get("arrivalGate") || "TBD").toUpperCase(),
       scheduledDeparture: String(form.get("scheduledDeparture") || "TBD"),
       estimatedDeparture: String(form.get("estimatedDeparture") || "TBD"),
       scheduledArrival: String(form.get("scheduledArrival") || "TBD"),
@@ -887,6 +914,84 @@ export default function Home() {
     notify("Flight status updated");
   }
 
+  async function requestLiveFlight(flight: FlightInfo): Promise<LiveFlightUpdate> {
+    if (!flight.departureDate) {
+      throw new Error("Add the local departure date before requesting a live update.");
+    }
+    const token = await getIdToken();
+    const response = await fetch("/api/flights/status", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        flightNumber: flight.number,
+        departureDate: flight.departureDate,
+        origin: flight.origin,
+        destination: flight.destination,
+      }),
+    });
+    const result = (await response.json().catch(() => ({}))) as Partial<LiveFlightUpdate> & { error?: string };
+    if (!response.ok || !result.flight || !result.status) {
+      throw new Error(result.error || "Live flight data could not be refreshed.");
+    }
+    return result as LiveFlightUpdate;
+  }
+
+  async function refreshTrackedFlight(event: DayEvent) {
+    if (!event.flight || !requireSignIn("refresh live flight data")) return;
+    const updateKey = `trip:${event.id || event.title}`;
+    setLiveUpdating(updateKey);
+    try {
+      const live = await requestLiveFlight(event.flight);
+      updateActiveTrip((trip) => ({
+        ...trip,
+        days: trip.days.map((tripDay) => ({
+          ...tripDay,
+          events: tripDay.events.map((item) => item.id === event.id
+            ? {
+                ...item,
+                title: `${live.flight.airline} ${live.flight.number}`,
+                time: live.flight.estimatedDeparture,
+                meta: `${live.flight.origin} → ${live.flight.destination} · Gate ${live.flight.gate}`,
+                status: live.status,
+                flight: { ...item.flight, ...live.flight },
+              }
+            : item),
+        })),
+      }));
+      setSelectedEvent((current) => current?.id === event.id
+        ? { ...current, status: live.status, flight: { ...current.flight, ...live.flight } }
+        : current);
+      notify(`${live.flight.number} refreshed from AeroDataBox`);
+    } catch (error) {
+      notify(friendlyFlightError(error));
+    } finally {
+      setLiveUpdating(null);
+    }
+  }
+
+  async function refreshGuestFlight(entry: GuestFlight) {
+    if (!requireSignIn("refresh a guest flight")) return;
+    const updateKey = `guest:${entry.id}`;
+    setLiveUpdating(updateKey);
+    try {
+      const live = await requestLiveFlight(entry.flight);
+      updateActiveTrip((trip) => ({
+        ...trip,
+        guestFlights: (trip.guestFlights || []).map((item) => item.id === entry.id
+          ? { ...item, status: live.status, flight: { ...item.flight, ...live.flight } }
+          : item),
+      }));
+      notify(`${live.flight.number} refreshed for ${entry.guestName}`);
+    } catch (error) {
+      notify(friendlyFlightError(error));
+    } finally {
+      setLiveUpdating(null);
+    }
+  }
+
   function addTrackedFlight(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!requireSignIn("track a flight")) return;
@@ -895,6 +1000,7 @@ export default function Home() {
     const airline = String(form.get("airline") || "Airline");
     const origin = String(form.get("origin") || "ORG").toUpperCase();
     const destination = String(form.get("destination") || "DST").toUpperCase();
+    const departureDate = String(form.get("departureDate") || "");
     const departure = formatTime(String(form.get("departure") || ""));
     const arrival = formatTime(String(form.get("arrival") || ""));
     const newFlight: DayEvent = {
@@ -905,8 +1011,8 @@ export default function Home() {
       kind: "flight",
       status: "Scheduled",
       flight: {
-        number, airline, origin, destination,
-        departureTerminal: "TBD", arrivalTerminal: "TBD", gate: "TBD",
+        number, airline, origin, destination, departureDate,
+        departureTerminal: "TBD", arrivalTerminal: "TBD", gate: "TBD", arrivalGate: "TBD",
         scheduledDeparture: departure, estimatedDeparture: departure,
         scheduledArrival: arrival, estimatedArrival: arrival,
         delayMinutes: 0, baggageClaim: "TBD", lastUpdated: "Just now",
@@ -940,9 +1046,11 @@ export default function Home() {
         airline: String(form.get("airline") || "Airline"),
         origin: String(form.get("origin") || "ORG").toUpperCase(),
         destination: String(form.get("destination") || "DST").toUpperCase(),
+        departureDate: String(form.get("departureDate") || ""),
         departureTerminal: String(form.get("departureTerminal") || "TBD"),
         arrivalTerminal: String(form.get("arrivalTerminal") || "TBD"),
         gate: String(form.get("gate") || "TBD").toUpperCase(),
+        arrivalGate: String(form.get("arrivalGate") || "TBD").toUpperCase(),
         scheduledDeparture: formatTime(String(form.get("departure") || "")),
         estimatedDeparture: formatTime(String(form.get("estimatedDeparture") || form.get("departure") || "")),
         scheduledArrival: formatTime(String(form.get("arrival") || "")),
@@ -1420,14 +1528,23 @@ export default function Home() {
                           <div><strong>{details?.destination || "DST"}</strong><span>{details?.estimatedArrival || "TBD"}</span></div>
                         </div>
                         <div className="flight-facts">
-                          <div><small>GATE</small><strong>{details?.gate || "TBD"}</strong></div>
+                          <div><small>GATES</small><strong>{details ? `${details.gate || "TBD"} → ${details.arrivalGate || "TBD"}` : "TBD"}</strong></div>
                           <div><small>TERMINALS</small><strong>{details ? `${details.departureTerminal} → ${details.arrivalTerminal}` : "TBD"}</strong></div>
                           <div><small>DELAY</small><strong className={delayed ? "delay-text" : ""}>{delayed ? `${details?.delayMinutes} min` : "None"}</strong></div>
                           <div><small>BAGGAGE</small><strong>{details?.baggageClaim || "TBD"}</strong></div>
                         </div>
                         <div className="flight-card-footer">
                           <span>{tripDay.short} {tripDay.date} · Updated {details?.lastUpdated || "when added"}</span>
-                          <button onClick={() => openFlightDetails(event)}>View details →</button>
+                          <div className="live-flight-actions">
+                            <button
+                              className="live-refresh-button"
+                              disabled={!details || liveUpdating === `trip:${event.id || event.title}`}
+                              onClick={() => void refreshTrackedFlight(event)}
+                            >
+                              {liveUpdating === `trip:${event.id || event.title}` ? "Refreshing…" : "↻ Live update"}
+                            </button>
+                            <button onClick={() => openFlightDetails(event)}>View details →</button>
+                          </div>
                         </div>
                       </article>
                     );
@@ -1441,7 +1558,7 @@ export default function Home() {
                   <button className="primary-action tracker-add" onClick={() => openMutationPanel("track-flight")}>Track your first flight</button>
                 </div>
               )}
-              <p className="tracker-note">Flight details are managed by your group. Live airline data requires a connected flight-data provider.</p>
+              <p className="tracker-note">Live updates come from AeroDataBox and are saved to Firebase for your other devices.</p>
             </div>
           )}
 
@@ -1480,12 +1597,19 @@ export default function Home() {
                           <div><strong>{entry.flight.destination}</strong><span>{entry.flight.estimatedArrival}</span></div>
                         </div>
                         <div className="flight-facts">
-                          <div><small>GATE</small><strong>{entry.flight.gate}</strong></div>
+                          <div><small>GATES</small><strong>{entry.flight.gate} → {entry.flight.arrivalGate || "TBD"}</strong></div>
                           <div><small>TERMINALS</small><strong>{entry.flight.departureTerminal} → {entry.flight.arrivalTerminal}</strong></div>
                           <div><small>DELAY</small><strong className={delayed ? "delay-text" : ""}>{entry.flight.delayMinutes ? `${entry.flight.delayMinutes} min` : "None"}</strong></div>
                           <div><small>UPDATED</small><strong>{entry.flight.lastUpdated}</strong></div>
                         </div>
                         <div className="guest-flight-actions">
+                          <button
+                            className="live-refresh-button"
+                            disabled={liveUpdating === `guest:${entry.id}`}
+                            onClick={() => void refreshGuestFlight(entry)}
+                          >
+                            {liveUpdating === `guest:${entry.id}` ? "Refreshing…" : "↻ Live update"}
+                          </button>
                           <button onClick={() => { setSelectedGuestFlight(entry); openMutationPanel("guest-flight"); }}>Update details</button>
                           <button className="danger-link" onClick={() => deleteGuestFlight(entry.id)}>Remove</button>
                         </div>
@@ -1501,7 +1625,7 @@ export default function Home() {
                   <button className="primary-action tracker-add" onClick={() => { setSelectedGuestFlight(null); openMutationPanel("guest-flight"); }}>Watch a guest flight</button>
                 </div>
               )}
-              <p className="tracker-note">JourneySync remembers these flights in your Firebase account. Automatic airline updates require a live flight-data provider.</p>
+              <p className="tracker-note">AeroDataBox supplies live operational updates; JourneySync saves the latest result to your Firebase account.</p>
             </div>
           )}
 
@@ -1876,13 +2000,18 @@ export default function Home() {
                 <label>Origin<input name="origin" maxLength={3} defaultValue={selectedFlight.flight?.origin || ""} required /></label>
                 <label>Destination<input name="destination" maxLength={3} defaultValue={selectedFlight.flight?.destination || ""} required /></label>
               </div>
+              <label>Local departure date<input name="departureDate" type="date" defaultValue={selectedFlight.flight?.departureDate || ""} required /></label>
               <div className="form-row">
                 <label>Departure terminal<input name="departureTerminal" defaultValue={selectedFlight.flight?.departureTerminal || "TBD"} /></label>
                 <label>Arrival terminal<input name="arrivalTerminal" defaultValue={selectedFlight.flight?.arrivalTerminal || "TBD"} /></label>
               </div>
               <div className="form-row">
                 <label>Gate<input name="gate" defaultValue={selectedFlight.flight?.gate || "TBD"} /></label>
+                <label>Arrival gate<input name="arrivalGate" defaultValue={selectedFlight.flight?.arrivalGate || "TBD"} /></label>
+              </div>
+              <div className="form-row">
                 <label>Status<select name="status" defaultValue={selectedFlight.status || "Scheduled"}><option>Scheduled</option><option>On time</option><option>Boarding</option><option>Delayed</option><option>Departed</option><option>Landed</option><option>Cancelled</option></select></label>
+                <span />
               </div>
               <div className="form-row">
                 <label>Scheduled departure<input name="scheduledDeparture" defaultValue={selectedFlight.flight?.scheduledDeparture || selectedFlight.time} /></label>
@@ -1918,6 +2047,7 @@ export default function Home() {
                 <label>Origin<input name="origin" placeholder="JFK" maxLength={3} required /></label>
                 <label>Destination<input name="destination" placeholder="ZRH" maxLength={3} required /></label>
               </div>
+              <label>Local departure date<input name="departureDate" type="date" defaultValue={activeTrip.startDate || ""} required /></label>
               <div className="form-row">
                 <label>Departure<input name="departure" type="time" required /></label>
                 <label>Arrival<input name="arrival" type="time" required /></label>
@@ -1947,6 +2077,7 @@ export default function Home() {
                 <label>Origin<input name="origin" defaultValue={selectedGuestFlight?.flight.origin || ""} maxLength={3} placeholder="JFK" required /></label>
                 <label>Destination<input name="destination" defaultValue={selectedGuestFlight?.flight.destination || ""} maxLength={3} placeholder="LHR" required /></label>
               </div>
+              <label>Local departure date<input name="departureDate" type="date" defaultValue={selectedGuestFlight?.flight.departureDate || activeTrip.startDate || ""} required /></label>
               <div className="form-row">
                 <label>Scheduled departure<input name="departure" defaultValue={selectedGuestFlight?.flight.scheduledDeparture || ""} placeholder="8:40 PM" required /></label>
                 <label>Estimated departure<input name="estimatedDeparture" defaultValue={selectedGuestFlight?.flight.estimatedDeparture || ""} placeholder="9:10 PM" /></label>
@@ -1961,7 +2092,11 @@ export default function Home() {
               </div>
               <div className="form-row">
                 <label>Gate<input name="gate" defaultValue={selectedGuestFlight?.flight.gate || "TBD"} /></label>
+                <label>Arrival gate<input name="arrivalGate" defaultValue={selectedGuestFlight?.flight.arrivalGate || "TBD"} /></label>
+              </div>
+              <div className="form-row">
                 <label>Status<select name="status" defaultValue={selectedGuestFlight?.status || "Scheduled"}><option>Scheduled</option><option>On time</option><option>Boarding</option><option>Delayed</option><option>Departed</option><option>Landed</option><option>Cancelled</option></select></label>
+                <span />
               </div>
               <div className="form-row">
                 <label>Delay in minutes<input name="delayMinutes" type="number" min="0" defaultValue={selectedGuestFlight?.flight.delayMinutes || 0} /></label>

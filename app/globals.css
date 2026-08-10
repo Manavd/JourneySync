@@ -326,6 +326,9 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
 .flight-card-footer { padding-top: 14px; }
 .flight-card-footer > span { color: #89949a; font-size: 8px; }
 .flight-card-footer button { border: 0; background: transparent; color: var(--coral); cursor: pointer; font-size: 9px; font-weight: 800; }
+.live-flight-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.flight-card-footer .live-refresh-button, .guest-flight-actions .live-refresh-button { color: #0875c9; }
+.flight-card-footer button:disabled, .guest-flight-actions button:disabled { cursor: wait; opacity: .55; }
 .flight-empty { min-height: 300px; border: 1px dashed #c7c9c6; border-radius: 12px; display: grid; place-items: center; align-content: center; gap: 10px; text-align: center; padding: 30px; background: rgba(255,253,248,.5); }
 .flight-empty > span { color: var(--coral); font-size: 30px; }
 .flight-empty h3 { font-family: Georgia, serif; font-size: 22px; font-weight: 500; margin: 0; }

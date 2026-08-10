@@ -27,9 +27,11 @@ public class TripSyncTest {
         flight.put("airline", "SWISS");
         flight.put("origin", "JFK");
         flight.put("destination", "ZRH");
+        flight.put("departureDate", "2026-09-12");
         flight.put("departureTerminal", "1");
         flight.put("arrivalTerminal", "2");
         flight.put("gate", "E52");
+        flight.put("arrivalGate", "A7");
         flight.put("scheduledDeparture", "8:40 PM");
         flight.put("estimatedDeparture", "9:10 PM");
         flight.put("scheduledArrival", "10:15 AM (+1)");
@@ -37,6 +39,8 @@ public class TripSyncTest {
         flight.put("delayMinutes", 30L); // Firestore returns whole numbers as Long.
         flight.put("baggageClaim", "Carousel 24");
         flight.put("lastUpdated", "Just now");
+        flight.put("lastUpdatedUtc", "2026-09-12T22:10:00Z");
+        flight.put("source", "AeroDataBox");
 
         Map<String, Object> event = new LinkedHashMap<>();
         event.put("id", "ev-1");
@@ -97,10 +101,13 @@ public class TripSyncTest {
         FlightInfo flight = flights.get(0).event.flight;
         assertNotNull(flight);
         assertEquals("E52", flight.gate);
+        assertEquals("A7", flight.arrivalGate);
+        assertEquals("2026-09-12", flight.departureDate);
         assertEquals("1", flight.departureTerminal);
         assertEquals(30, flight.delayMinutes);
         assertTrue(flight.isDelayed());
         assertEquals("Carousel 24", flight.baggageClaim);
+        assertEquals("AeroDataBox", flight.source);
         assertEquals(0, flights.get(0).dayIndex);
     }
 

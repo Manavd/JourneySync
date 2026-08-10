@@ -32,8 +32,18 @@ import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.auth.GoogleAuthProvider;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.SetOptions;
 
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -67,7 +77,7 @@ public class MainActivity extends android.app.Activity {
     private static final String[] EVENT_KIND_LABELS = {
             "🏛️ Activity", "✈️ Flight", "🏨 Stay", "🍽️ Food / Dining", "🚆 Train / Transit"
     };
-    private static final String[] FLIGHT_STATUSES = {"Scheduled", "On time", "Delayed", "Boarding", "Landed", "Cancelled"};
+    private static final String[] FLIGHT_STATUSES = {"Scheduled", "On time", "Delayed", "Boarding", "Departed", "Landed", "Cancelled"};
 
     private FirebaseAuth firebaseAuth;
     private FirebaseFirestore firestore;
@@ -89,6 +99,7 @@ public class MainActivity extends android.app.Activity {
      */
     private String renderedUid;
     private boolean tripsLoaded;
+    private ListenerRegistration tripsListener;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -137,6 +148,10 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void showLogin() {
+        if (tripsListener != null) {
+            tripsListener.remove();
+            tripsListener = null;
+        }
         prepareScreen();
         renderedUid = null;
         tripsLoaded = false;
@@ -263,7 +278,20 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void loadTrips(FirebaseUser user) {
-        allTripsDoc(user).get().addOnSuccessListener(snapshot -> {
+        if (tripsListener != null) tripsListener.remove();
+        tripsListener = allTripsDoc(user).addSnapshotListener((snapshot, error) -> {
+            if (error != null) {
+                tripsLoaded = true;
+                if (savedTrips.isEmpty()) {
+                    Trip defaultTrip = createDefaultTrip();
+                    savedTrips.add(defaultTrip);
+                    activeTripId = defaultTrip.id;
+                }
+                renderDashboard(user);
+                toast("Showing saved itinerary while cloud sync reconnects.");
+                return;
+            }
+            if (snapshot == null) return;
             savedTrips.clear();
             Object rawTrips = snapshot.get("savedTrips");
             if (rawTrips instanceof List) {
@@ -290,15 +318,6 @@ public class MainActivity extends android.app.Activity {
                 if (active == null) activeTripId = savedTrips.get(0).id;
                 renderDashboard(user);
             }
-        }).addOnFailureListener(error -> {
-            tripsLoaded = true;
-            if (savedTrips.isEmpty()) {
-                Trip defaultTrip = createDefaultTrip();
-                savedTrips.add(defaultTrip);
-                activeTripId = defaultTrip.id;
-            }
-            renderDashboard(user);
-            toast("Showing saved itinerary while cloud sync reconnects.");
         });
     }
 
@@ -740,13 +759,17 @@ public class MainActivity extends android.app.Activity {
             owner.addView(badge(guest.status, guest.isDelayed() ? ORANGE : GREEN));
             guestCard.addView(owner, margins(0, 0, 0, 14));
             guestCard.addView(text(flight.displayTitle(), 19, INK, true));
-            guestCard.addView(text(flight.origin + " → " + flight.destination + " · Gate " + flight.gate, 14, MUTED, false), margins(0, 4, 0, 10));
+            guestCard.addView(text(flight.origin + " → " + flight.destination + " · Gates " + flight.gate + " → " + flight.arrivalGate, 14, MUTED, false), margins(0, 4, 0, 10));
             guestCard.addView(factRow("DEPARTURE", flight.estimatedDeparture, INK,
                     "ARRIVAL", flight.estimatedArrival, INK));
             guestCard.addView(factRow("TERMINALS", flight.departureTerminal + " → " + flight.arrivalTerminal, INK,
                     "DELAY", guest.isDelayed() ? flight.delayMinutes + " min" : "None", guest.isDelayed() ? CORAL : GREEN), margins(0, 12, 0, 12));
             LinearLayout actions = new LinearLayout(this);
             actions.setOrientation(LinearLayout.HORIZONTAL);
+            Button live = outlineButton("↻ Live update");
+            live.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            live.setOnClickListener(v -> refreshLiveFlight(user, null, guest));
+            actions.addView(live, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
             Button update = outlineButton("Update details");
             update.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
             update.setOnClickListener(v -> showGuestFlightDialog(user, trip, guest));
@@ -902,6 +925,104 @@ public class MainActivity extends android.app.Activity {
 
     // ---------------------------------------------------------------- flights
 
+    private void refreshLiveFlight(FirebaseUser user, DayEvent event, GuestFlight guest) {
+        FlightInfo flight = event != null ? event.requireFlight() : guest == null ? null : guest.flight;
+        if (flight == null) {
+            toast("This flight has no saved details yet.");
+            return;
+        }
+        if (flight.departureDate == null || flight.departureDate.trim().isEmpty()) {
+            toast("Add the local departure date before requesting a live update.");
+            return;
+        }
+
+        toast("Checking AeroDataBox for " + flight.number + "â€¦");
+        user.getIdToken(false).addOnSuccessListener(tokenResult -> new Thread(() -> {
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL(BuildConfig.FLIGHT_API_BASE_URL + "/api/flights/status");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setConnectTimeout(15_000);
+                connection.setReadTimeout(25_000);
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Authorization", "Bearer " + tokenResult.getToken());
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("Accept", "application/json");
+
+                JSONObject request = new JSONObject();
+                request.put("flightNumber", flight.number);
+                request.put("departureDate", flight.departureDate);
+                request.put("origin", flight.origin);
+                request.put("destination", flight.destination);
+                byte[] payload = request.toString().getBytes(StandardCharsets.UTF_8);
+                try (OutputStream output = connection.getOutputStream()) {
+                    output.write(payload);
+                }
+
+                int statusCode = connection.getResponseCode();
+                InputStream stream = statusCode >= 200 && statusCode < 300
+                        ? connection.getInputStream() : connection.getErrorStream();
+                JSONObject response = new JSONObject(readResponse(stream));
+                if (statusCode < 200 || statusCode >= 300) {
+                    throw new IllegalStateException(response.optString("error", "Live flight data could not be refreshed."));
+                }
+
+                JSONObject liveFlight = response.getJSONObject("flight");
+                String liveStatus = response.optString("status", "On time");
+                runOnUiThread(() -> {
+                    applyLiveFlight(flight, liveFlight);
+                    if (event != null) {
+                        event.status = liveStatus;
+                        event.title = flight.displayTitle();
+                        event.time = flight.estimatedDeparture;
+                        event.meta = flight.displayMeta();
+                    }
+                    if (guest != null) guest.status = liveStatus;
+                    commit(user);
+                    toast(flight.number + " refreshed from AeroDataBox");
+                });
+            } catch (Exception error) {
+                String message = error.getMessage() == null || error.getMessage().trim().isEmpty()
+                        ? "Live flight data could not be refreshed." : error.getMessage();
+                runOnUiThread(() -> toast(message));
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }).start()).addOnFailureListener(error -> toast("Firebase could not authorize the live update."));
+    }
+
+    private void applyLiveFlight(FlightInfo target, JSONObject source) {
+        target.number = source.optString("number", target.number);
+        target.airline = source.optString("airline", target.airline);
+        target.origin = source.optString("origin", target.origin);
+        target.destination = source.optString("destination", target.destination);
+        target.departureDate = source.optString("departureDate", target.departureDate);
+        target.departureTerminal = source.optString("departureTerminal", FlightInfo.UNKNOWN);
+        target.arrivalTerminal = source.optString("arrivalTerminal", FlightInfo.UNKNOWN);
+        target.gate = source.optString("gate", FlightInfo.UNKNOWN);
+        target.arrivalGate = source.optString("arrivalGate", FlightInfo.UNKNOWN);
+        target.scheduledDeparture = source.optString("scheduledDeparture", target.scheduledDeparture);
+        target.estimatedDeparture = source.optString("estimatedDeparture", target.estimatedDeparture);
+        target.scheduledArrival = source.optString("scheduledArrival", target.scheduledArrival);
+        target.estimatedArrival = source.optString("estimatedArrival", target.estimatedArrival);
+        target.delayMinutes = Math.max(0, source.optInt("delayMinutes", 0));
+        target.baggageClaim = source.optString("baggageClaim", FlightInfo.UNKNOWN);
+        target.lastUpdated = source.optString("lastUpdated", "Live just now");
+        target.lastUpdatedUtc = source.optString("lastUpdatedUtc", "");
+        target.source = source.optString("source", "AeroDataBox");
+    }
+
+    private String readResponse(InputStream stream) throws Exception {
+        if (stream == null) return "{}";
+        StringBuilder body = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) body.append(line);
+        }
+        return body.toString();
+    }
+
     private void renderFlightTracker(FirebaseUser user, Trip trip) {
         screen.addView(text("TRIP OPERATIONS", 12, FAINT, true), margins(0, 0, 0, 4));
         screen.addView(text("Flight Tracker", 22, INK, true), margins(0, 0, 0, 4));
@@ -969,7 +1090,7 @@ public class MainActivity extends android.app.Activity {
                 ? flight.departureTerminal + " → " + flight.arrivalTerminal
                 : FlightInfo.UNKNOWN;
         String delay = delayed ? flight.delayMinutes + " min" : "None";
-        flightCard.addView(factRow("GATE", flight != null ? flight.gate : FlightInfo.UNKNOWN, INK,
+        flightCard.addView(factRow("GATES", flight != null ? flight.gate + " → " + flight.arrivalGate : FlightInfo.UNKNOWN, INK,
                 "TERMINALS", terminals, INK), margins(0, 0, 0, 10));
         flightCard.addView(factRow("DELAY", delay, delayed ? CORAL : INK,
                 "BAGGAGE", flight != null ? flight.baggageClaim : FlightInfo.UNKNOWN, INK), margins(0, 0, 0, 14));
@@ -982,6 +1103,12 @@ public class MainActivity extends android.app.Activity {
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.END);
+
+        Button liveBtn = outlineButton("↻ Live update");
+        liveBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        liveBtn.setPadding(dp(12), dp(8), dp(12), dp(8));
+        liveBtn.setOnClickListener(v -> refreshLiveFlight(user, event, null));
+        actions.addView(liveBtn, margins(0, 0, 8, 0));
 
         Button editBtn = primaryButton("✏️ Update status");
         editBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
@@ -1043,6 +1170,7 @@ public class MainActivity extends android.app.Activity {
         EditText numberInput = input("Flight number (e.g. LX 017)", InputType.TYPE_CLASS_TEXT, "");
         EditText originInput = input("From (e.g. JFK)", InputType.TYPE_CLASS_TEXT, "");
         EditText destinationInput = input("To (e.g. ZRH)", InputType.TYPE_CLASS_TEXT, "");
+        EditText dateInput = input("Local departure date (YYYY-MM-DD)", InputType.TYPE_CLASS_DATETIME, safeText(trip.startDate, ""));
         EditText departureInput = input("Departs (e.g. 8:40 PM)", InputType.TYPE_CLASS_TEXT, "");
         EditText arrivalInput = input("Arrives (e.g. 10:15 AM)", InputType.TYPE_CLASS_TEXT, "");
 
@@ -1050,6 +1178,7 @@ public class MainActivity extends android.app.Activity {
         addField(form, "Flight number", numberInput);
         addField(form, "From (airport code)", originInput);
         addField(form, "To (airport code)", destinationInput);
+        addField(form, "Local departure date", dateInput);
         addField(form, "Departure time", departureInput);
         addField(form, "Arrival time", arrivalInput);
         form.addView(text("Adds to Day " + (activeDayIndex + 1) + " · " + safeText(day.label, "this day"),
@@ -1065,6 +1194,7 @@ public class MainActivity extends android.app.Activity {
                     flight.number = fallback(numberInput, "Flight").toUpperCase();
                     flight.origin = fallback(originInput, "ORG").toUpperCase();
                     flight.destination = fallback(destinationInput, "DST").toUpperCase();
+                    flight.departureDate = fallback(dateInput, "");
                     flight.scheduledDeparture = formatTime(departureInput.getText().toString());
                     flight.estimatedDeparture = flight.scheduledDeparture;
                     flight.scheduledArrival = formatTime(arrivalInput.getText().toString());
@@ -1099,9 +1229,11 @@ public class MainActivity extends android.app.Activity {
         EditText numberInput = input("Flight number", InputType.TYPE_CLASS_TEXT, flight.number);
         EditText originInput = input("From", InputType.TYPE_CLASS_TEXT, flight.origin);
         EditText destinationInput = input("To", InputType.TYPE_CLASS_TEXT, flight.destination);
+        EditText dateInput = input("Local departure date", InputType.TYPE_CLASS_DATETIME, flight.departureDate);
         EditText depTerminalInput = input("Departure terminal", InputType.TYPE_CLASS_TEXT, flight.departureTerminal);
         EditText arrTerminalInput = input("Arrival terminal", InputType.TYPE_CLASS_TEXT, flight.arrivalTerminal);
         EditText gateInput = input("Gate", InputType.TYPE_CLASS_TEXT, flight.gate);
+        EditText arrivalGateInput = input("Arrival gate", InputType.TYPE_CLASS_TEXT, flight.arrivalGate);
         EditText schedDepInput = input("Scheduled departure", InputType.TYPE_CLASS_TEXT, flight.scheduledDeparture);
         EditText estDepInput = input("Estimated departure", InputType.TYPE_CLASS_TEXT, flight.estimatedDeparture);
         EditText schedArrInput = input("Scheduled arrival", InputType.TYPE_CLASS_TEXT, flight.scheduledArrival);
@@ -1124,9 +1256,11 @@ public class MainActivity extends android.app.Activity {
         addField(form, "Flight number", numberInput);
         addField(form, "From", originInput);
         addField(form, "To", destinationInput);
+        addField(form, "Local departure date", dateInput);
         addField(form, "Departure terminal", depTerminalInput);
         addField(form, "Arrival terminal", arrTerminalInput);
         addField(form, "Gate", gateInput);
+        addField(form, "Arrival gate", arrivalGateInput);
         addField(form, "Scheduled departure", schedDepInput);
         addField(form, "Estimated departure", estDepInput);
         addField(form, "Scheduled arrival", schedArrInput);
@@ -1145,9 +1279,11 @@ public class MainActivity extends android.app.Activity {
                     flight.number = fallback(numberInput, "Flight").toUpperCase();
                     flight.origin = fallback(originInput, "ORG").toUpperCase();
                     flight.destination = fallback(destinationInput, "DST").toUpperCase();
+                    flight.departureDate = fallback(dateInput, "");
                     flight.departureTerminal = fallback(depTerminalInput, FlightInfo.UNKNOWN);
                     flight.arrivalTerminal = fallback(arrTerminalInput, FlightInfo.UNKNOWN);
                     flight.gate = fallback(gateInput, FlightInfo.UNKNOWN).toUpperCase();
+                    flight.arrivalGate = fallback(arrivalGateInput, FlightInfo.UNKNOWN).toUpperCase();
                     flight.scheduledDeparture = formatTime(schedDepInput.getText().toString());
                     flight.estimatedDeparture = formatTime(estDepInput.getText().toString());
                     flight.scheduledArrival = formatTime(schedArrInput.getText().toString());
@@ -1182,6 +1318,8 @@ public class MainActivity extends android.app.Activity {
         EditText number = input("Flight number", InputType.TYPE_CLASS_TEXT, existing == null ? "" : current.number);
         EditText origin = input("Origin airport", InputType.TYPE_CLASS_TEXT, existing == null ? "" : current.origin);
         EditText destination = input("Destination airport", InputType.TYPE_CLASS_TEXT, existing == null ? "" : current.destination);
+        EditText departureDate = input("Local departure date", InputType.TYPE_CLASS_DATETIME,
+                existing == null ? safeText(trip.startDate, "") : current.departureDate);
         EditText scheduledDeparture = input("Scheduled departure", InputType.TYPE_CLASS_TEXT, current.scheduledDeparture);
         EditText estimatedDeparture = input("Estimated departure", InputType.TYPE_CLASS_TEXT, current.estimatedDeparture);
         EditText scheduledArrival = input("Scheduled arrival", InputType.TYPE_CLASS_TEXT, current.scheduledArrival);
@@ -1189,6 +1327,7 @@ public class MainActivity extends android.app.Activity {
         EditText departureTerminal = input("Departure terminal", InputType.TYPE_CLASS_TEXT, current.departureTerminal);
         EditText arrivalTerminal = input("Arrival terminal", InputType.TYPE_CLASS_TEXT, current.arrivalTerminal);
         EditText gate = input("Gate", InputType.TYPE_CLASS_TEXT, current.gate);
+        EditText arrivalGate = input("Arrival gate", InputType.TYPE_CLASS_TEXT, current.arrivalGate);
         EditText delay = input("Delay in minutes", InputType.TYPE_CLASS_NUMBER, String.valueOf(current.delayMinutes));
         EditText baggage = input("Baggage claim", InputType.TYPE_CLASS_TEXT, current.baggageClaim);
         final int[] statusIndex = {Math.max(0, indexOfIgnoreCase(FLIGHT_STATUSES, existing == null ? "Scheduled" : existing.status))};
@@ -1198,10 +1337,12 @@ public class MainActivity extends android.app.Activity {
         addField(form, "Guest name", guestName); addField(form, "Note", note);
         addField(form, "Airline", airline); addField(form, "Flight number", number);
         addField(form, "Origin", origin); addField(form, "Destination", destination);
+        addField(form, "Local departure date", departureDate);
         addField(form, "Scheduled departure", scheduledDeparture); addField(form, "Estimated departure", estimatedDeparture);
         addField(form, "Scheduled arrival", scheduledArrival); addField(form, "Estimated arrival", estimatedArrival);
         addField(form, "Departure terminal", departureTerminal); addField(form, "Arrival terminal", arrivalTerminal);
-        addField(form, "Gate", gate); addField(form, "Delay in minutes", delay); addField(form, "Baggage claim", baggage);
+        addField(form, "Departure gate", gate); addField(form, "Arrival gate", arrivalGate);
+        addField(form, "Delay in minutes", delay); addField(form, "Baggage claim", baggage);
         form.addView(text("Status", 13, MUTED, true), margins(0, 0, 0, 4)); form.addView(status);
 
         new AlertDialog.Builder(this).setTitle(existing == null ? "Watch a Guest Flight" : "Update Guest Flight")
@@ -1216,6 +1357,7 @@ public class MainActivity extends android.app.Activity {
                     FlightInfo flight = current;
                     flight.airline = fallback(airline, "Airline"); flight.number = fallback(number, "Flight").toUpperCase();
                     flight.origin = fallback(origin, "ORG").toUpperCase(); flight.destination = fallback(destination, "DST").toUpperCase();
+                    flight.departureDate = fallback(departureDate, "");
                     flight.scheduledDeparture = formatTime(scheduledDeparture.getText().toString());
                     flight.estimatedDeparture = formatTime(estimatedDeparture.getText().toString());
                     flight.scheduledArrival = formatTime(scheduledArrival.getText().toString());
@@ -1223,6 +1365,7 @@ public class MainActivity extends android.app.Activity {
                     flight.departureTerminal = fallback(departureTerminal, FlightInfo.UNKNOWN);
                     flight.arrivalTerminal = fallback(arrivalTerminal, FlightInfo.UNKNOWN);
                     flight.gate = fallback(gate, FlightInfo.UNKNOWN).toUpperCase();
+                    flight.arrivalGate = fallback(arrivalGate, FlightInfo.UNKNOWN).toUpperCase();
                     flight.delayMinutes = delayMinutes; flight.baggageClaim = fallback(baggage, FlightInfo.UNKNOWN); flight.lastUpdated = "Just now";
                     guest.flight = flight;
                     if (trip.guestFlights == null) trip.guestFlights = new ArrayList<>();
@@ -1728,9 +1871,11 @@ public class MainActivity extends android.app.Activity {
         arrivalFlight.airline = "SWISS";
         arrivalFlight.origin = "JFK";
         arrivalFlight.destination = "ZRH";
+        arrivalFlight.departureDate = "2026-09-12";
         arrivalFlight.departureTerminal = "1";
         arrivalFlight.arrivalTerminal = "2";
         arrivalFlight.gate = "E52";
+        arrivalFlight.arrivalGate = "TBD";
         arrivalFlight.scheduledDeparture = "8:40 PM";
         arrivalFlight.estimatedDeparture = "8:40 PM";
         arrivalFlight.scheduledArrival = "10:15 AM (+1)";
