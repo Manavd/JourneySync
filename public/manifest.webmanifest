@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "JourneySync",
+  "short_name": "JourneySync",
+  "description": "Every plan. Every person. One journey.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f9fc",
+  "theme_color": "#0c79d8",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

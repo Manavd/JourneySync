@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.manavdesai.journeysync",
+      "sha256_cert_fingerprints": [
+        "E9:80:56:8D:B0:57:85:8B:A5:F7:88:B6:3B:BB:D6:C9:BC:6C:8F:91:B9:36:52:29:78:60:DC:BD:64:1A:4A:50"
+      ]
+    }
+  }
+]
