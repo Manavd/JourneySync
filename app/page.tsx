@@ -61,6 +61,11 @@ type LiveFlightUpdate = {
   flight: FlightInfo;
 };
 
+type LiveFlightSearchResponse = Partial<LiveFlightUpdate> & {
+  flights?: LiveFlightUpdate[];
+  error?: string;
+};
+
 type Day = {
   id?: string;
   date: string;
@@ -456,6 +461,10 @@ export default function Home() {
   const [selectedEvent, setSelectedEvent] = useState<DayEvent | null>(null);
   const [selectedGuestFlight, setSelectedGuestFlight] = useState<GuestFlight | null>(null);
   const [liveUpdating, setLiveUpdating] = useState<string | null>(null);
+  const [flightSearchMode, setFlightSearchMode] = useState<"route" | "number">("route");
+  const [flightSearchResults, setFlightSearchResults] = useState<LiveFlightUpdate[]>([]);
+  const [flightSearchBusy, setFlightSearchBusy] = useState(false);
+  const [flightSearchError, setFlightSearchError] = useState("");
   const [dayDropdownOpen, setDayDropdownOpen] = useState(false);
   const [selectedMapPin, setSelectedMapPin] = useState<string>(() => mapPins[0]?.name || "Zürich");
 
@@ -937,6 +946,61 @@ export default function Home() {
       throw new Error(result.error || "Live flight data could not be refreshed.");
     }
     return result as LiveFlightUpdate;
+  }
+
+  async function searchLiveFlights(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requireSignIn("search live flight information")) return;
+    const form = new FormData(event.currentTarget);
+    setFlightSearchBusy(true);
+    setFlightSearchError("");
+    setFlightSearchResults([]);
+    try {
+      const token = await getIdToken();
+      const response = await fetch("/api/flights/status", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          searchMode: flightSearchMode,
+          departureDate: String(form.get("departureDate") || ""),
+          flightNumber: String(form.get("flightNumber") || ""),
+          origin: String(form.get("origin") || ""),
+          destination: String(form.get("destination") || ""),
+        }),
+      });
+      const result = (await response.json().catch(() => ({}))) as LiveFlightSearchResponse;
+      const flights = result.flights || (result.flight && result.status ? [{ flight: result.flight, status: result.status }] : []);
+      if (!response.ok || flights.length === 0) throw new Error(result.error || "No matching flights were returned.");
+      setFlightSearchResults(flights);
+      notify(`${flights.length} live flight ${flights.length === 1 ? "match" : "matches"} found`);
+    } catch (error) {
+      setFlightSearchError(friendlyFlightError(error));
+    } finally {
+      setFlightSearchBusy(false);
+    }
+  }
+
+  function addLiveSearchResult(result: LiveFlightUpdate) {
+    if (!requireSignIn("add a live flight to your tracker")) return;
+    const details = result.flight;
+    const newFlight: DayEvent = {
+      id: `flight-${Date.now()}`,
+      time: details.estimatedDeparture,
+      title: `${details.airline} ${details.number}`,
+      meta: `${details.origin} → ${details.destination} · Gate ${details.gate}`,
+      kind: "flight",
+      status: result.status,
+      flight: details,
+    };
+    updateActiveTrip((trip) => ({
+      ...trip,
+      days: trip.days.map((tripDay, index) => index === activeDay
+        ? { ...tripDay, events: [...tripDay.events, newFlight] }
+        : tripDay),
+    }));
+    setSelectedEvent(newFlight);
+    setFlightSearchResults((current) => current.filter((item) => item !== result));
+    notify(`${details.number} added to Day ${activeDay + 1}`);
   }
 
   async function refreshTrackedFlight(event: DayEvent) {
@@ -1499,10 +1563,60 @@ export default function Home() {
                 <div>
                   <span className="eyebrow">TRIP OPERATIONS</span>
                   <h2>Flight Tracker</h2>
-                  <p>Gate, terminal, timing, delay, and baggage details stored with your itinerary.</p>
+                  <p>Search live flight information, then keep gate, terminal, timing, delay, and baggage updates with your itinerary.</p>
                 </div>
                 <button className="primary-action tracker-add" onClick={() => openMutationPanel("track-flight")}>＋ Track a flight</button>
               </div>
+
+              <details className="live-flight-finder" open>
+                <summary>
+                  <span><strong>Live flight information</strong><small>Search by route and date, or by flight code</small></span>
+                  <span className="finder-chevron" aria-hidden="true">⌄</span>
+                </summary>
+                <form className="live-flight-search" onSubmit={searchLiveFlights}>
+                  <label className="search-mode-label">Find a flight using
+                    <select value={flightSearchMode} onChange={(event) => { setFlightSearchMode(event.target.value as "route" | "number"); setFlightSearchResults([]); setFlightSearchError(""); }}>
+                      <option value="route">From and to airports</option>
+                      <option value="number">Flight code</option>
+                    </select>
+                  </label>
+                  <div className="live-flight-fields">
+                    {flightSearchMode === "route" ? (
+                      <>
+                        <label>From airport<input name="origin" maxLength={3} placeholder="JFK" autoCapitalize="characters" required /></label>
+                        <label>To airport<input name="destination" maxLength={3} placeholder="LHR" autoCapitalize="characters" required /></label>
+                      </>
+                    ) : (
+                      <label className="flight-code-field">Flight code<input name="flightNumber" placeholder="AA 100" autoCapitalize="characters" required /></label>
+                    )}
+                    <label>Departure date<input name="departureDate" type="date" defaultValue={activeTrip.startDate || ""} required /></label>
+                    <button className="primary-action live-search-button" disabled={flightSearchBusy}>
+                      {flightSearchBusy ? "Checking AeroDataBox…" : "Search live flights"}
+                    </button>
+                  </div>
+                </form>
+                {flightSearchError && <div className="flight-search-error" role="alert">{flightSearchError}</div>}
+                {flightSearchResults.length > 0 && (
+                  <div className="live-search-results" aria-live="polite">
+                    {flightSearchResults.map((result, index) => {
+                      const details = result.flight;
+                      const delayed = details.delayMinutes > 0 || result.status.toLowerCase() === "delayed";
+                      return (
+                        <article className="live-search-result" key={`${details.number}-${details.scheduledDeparture}-${index}`}>
+                          <div>
+                            <span className={`flight-status ${delayed ? "delayed" : "on-time"}`}>{result.status}</span>
+                            <strong>{details.number}</strong>
+                            <small>{details.airline}</small>
+                          </div>
+                          <div className="search-result-route"><strong>{details.origin} → {details.destination}</strong><span>{details.estimatedDeparture} → {details.estimatedArrival}</span></div>
+                          <div className="search-result-gate"><small>GATE / DELAY</small><strong>{details.gate} · {details.delayMinutes ? `${details.delayMinutes} min` : "No delay"}</strong></div>
+                          <button type="button" className="secondary-action" onClick={() => addLiveSearchResult(result)}>Add to tracker</button>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </details>
 
               {delayedTripFlights.length > 0 && (
                 <div className="delay-alert" role="status">

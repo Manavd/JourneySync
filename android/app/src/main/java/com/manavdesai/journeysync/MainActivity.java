@@ -10,11 +10,13 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -35,6 +37,7 @@ import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.SetOptions;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -1026,8 +1029,17 @@ public class MainActivity extends android.app.Activity {
     private void renderFlightTracker(FirebaseUser user, Trip trip) {
         screen.addView(text("TRIP OPERATIONS", 12, FAINT, true), margins(0, 0, 0, 4));
         screen.addView(text("Flight Tracker", 22, INK, true), margins(0, 0, 0, 4));
-        screen.addView(text("Gate, terminal, timing, delay, and baggage details stored with your itinerary.",
+        screen.addView(text("Search live flight information, then keep gate, terminal, timing, delay, and baggage details with your itinerary.",
                 14, MUTED, false), margins(0, 0, 0, 14));
+
+        LinearLayout liveFinder = card();
+        liveFinder.addView(text("Live flight information", 18, INK, true));
+        liveFinder.addView(text("Use the dropdown to search by route and date, or by flight code.",
+                13, MUTED, false), margins(0, 4, 0, 12));
+        Button liveSearch = primaryButton("Search AeroDataBox");
+        liveSearch.setOnClickListener(v -> showLiveFlightSearchDialog(user, trip));
+        liveFinder.addView(liveSearch);
+        screen.addView(liveFinder, margins(0, 0, 0, 14));
 
         Button addFlight = primaryButton("＋ Track a flight");
         addFlight.setOnClickListener(v -> showTrackFlightDialog(user, trip));
@@ -1155,6 +1167,149 @@ public class MainActivity extends android.app.Activity {
         column.addView(text(label, 11, FAINT, true));
         column.addView(text(safeText(value, FlightInfo.UNKNOWN), 15, valueColor, true), margins(0, 2, 0, 0));
         return column;
+    }
+
+    /** Searches the protected JourneySync endpoint by route/date or by flight code. */
+    private void showLiveFlightSearchDialog(FirebaseUser user, Trip trip) {
+        LinearLayout form = formContainer();
+        Spinner mode = new Spinner(this);
+        ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item,
+                new String[]{"From and to airports", "Flight code"});
+        modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        mode.setAdapter(modeAdapter);
+
+        EditText origin = input("From airport (e.g. JFK)", InputType.TYPE_CLASS_TEXT, "");
+        EditText destination = input("To airport (e.g. LHR)", InputType.TYPE_CLASS_TEXT, "");
+        EditText flightNumber = input("Flight code (e.g. AA 100)", InputType.TYPE_CLASS_TEXT, "");
+        EditText date = input("YYYY-MM-DD", InputType.TYPE_CLASS_DATETIME, safeText(trip.startDate, ""));
+        form.addView(text("Search using", 12, MUTED, true), margins(0, 0, 0, 4));
+        form.addView(mode, margins(0, 0, 0, 12));
+        addField(form, "From airport (route search)", origin);
+        addField(form, "To airport (route search)", destination);
+        addField(form, "Flight code (code search)", flightNumber);
+        addField(form, "Local departure date", date);
+        form.addView(text("Only the fields for your selected search type are required.",
+                12, FAINT, false), margins(0, 5, 0, 0));
+
+        new AlertDialog.Builder(this)
+                .setTitle("Live flight information")
+                .setView(scrollable(form))
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Search live flights", (dialog, which) -> {
+                    boolean routeSearch = mode.getSelectedItemPosition() == 0;
+                    String dateValue = date.getText().toString().trim();
+                    String originValue = origin.getText().toString().trim().toUpperCase();
+                    String destinationValue = destination.getText().toString().trim().toUpperCase();
+                    String numberValue = flightNumber.getText().toString().trim().toUpperCase();
+                    if (!dateValue.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                        toast("Enter the departure date as YYYY-MM-DD.");
+                        return;
+                    }
+                    if (routeSearch && (!originValue.matches("[A-Z]{3}") || !destinationValue.matches("[A-Z]{3}"))) {
+                        toast("Enter three-letter from and to airport codes.");
+                        return;
+                    }
+                    if (!routeSearch && numberValue.replaceAll("[^A-Z0-9]", "").length() < 2) {
+                        toast("Enter a valid flight code, such as AA 100.");
+                        return;
+                    }
+                    requestLiveFlightSearch(user, trip, routeSearch, originValue, destinationValue, numberValue, dateValue);
+                })
+                .show();
+    }
+
+    private void requestLiveFlightSearch(FirebaseUser user, Trip trip, boolean routeSearch,
+                                         String origin, String destination, String number, String date) {
+        toast("Checking AeroDataBox live flight information…");
+        user.getIdToken(false).addOnSuccessListener(tokenResult -> new Thread(() -> {
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL(BuildConfig.FLIGHT_API_BASE_URL + "/api/flights/status");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setConnectTimeout(15_000);
+                connection.setReadTimeout(35_000);
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Authorization", "Bearer " + tokenResult.getToken());
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("Accept", "application/json");
+
+                JSONObject request = new JSONObject();
+                request.put("searchMode", routeSearch ? "route" : "number");
+                request.put("departureDate", date);
+                request.put("origin", origin);
+                request.put("destination", destination);
+                request.put("flightNumber", number);
+                try (OutputStream output = connection.getOutputStream()) {
+                    output.write(request.toString().getBytes(StandardCharsets.UTF_8));
+                }
+
+                int statusCode = connection.getResponseCode();
+                InputStream stream = statusCode >= 200 && statusCode < 300
+                        ? connection.getInputStream() : connection.getErrorStream();
+                JSONObject response = new JSONObject(readResponse(stream));
+                if (statusCode < 200 || statusCode >= 300) {
+                    throw new IllegalStateException(response.optString("error", "Live flight search failed."));
+                }
+
+                List<JSONObject> results = new ArrayList<>();
+                if (routeSearch) {
+                    JSONArray flights = response.optJSONArray("flights");
+                    if (flights != null) {
+                        for (int index = 0; index < flights.length(); index++) results.add(flights.getJSONObject(index));
+                    }
+                } else {
+                    results.add(response);
+                }
+                if (results.isEmpty()) throw new IllegalStateException("No matching flights were returned.");
+                runOnUiThread(() -> showLiveFlightSearchResults(user, trip, results));
+            } catch (Exception error) {
+                String message = error.getMessage() == null || error.getMessage().trim().isEmpty()
+                        ? "Live flight search failed." : error.getMessage();
+                runOnUiThread(() -> toast(message));
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }).start()).addOnFailureListener(error -> toast("Firebase could not authorize the live flight search."));
+    }
+
+    private void showLiveFlightSearchResults(FirebaseUser user, Trip trip, List<JSONObject> results) {
+        String[] labels = new String[results.size()];
+        for (int index = 0; index < results.size(); index++) {
+            JSONObject result = results.get(index);
+            JSONObject flight = result.optJSONObject("flight");
+            if (flight == null) flight = new JSONObject();
+            labels[index] = flight.optString("number", "Flight") + "  "
+                    + flight.optString("origin", "ORG") + " → " + flight.optString("destination", "DST")
+                    + "\n" + flight.optString("estimatedDeparture", "TBD") + " · "
+                    + result.optString("status", "Scheduled") + " · Gate " + flight.optString("gate", "TBD");
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Choose a live flight")
+                .setItems(labels, (dialog, which) -> addLiveFlightResult(user, trip, results.get(which)))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void addLiveFlightResult(FirebaseUser user, Trip trip, JSONObject result) {
+        Day day = getActiveDay(trip);
+        JSONObject live = result.optJSONObject("flight");
+        if (day == null || live == null) {
+            toast("Add an itinerary day before tracking this flight.");
+            return;
+        }
+        FlightInfo flight = new FlightInfo();
+        applyLiveFlight(flight, live);
+        DayEvent event = new DayEvent("flight-" + System.currentTimeMillis(),
+                flight.estimatedDeparture, flight.displayTitle(), flight.displayMeta(), "flight",
+                result.optString("status", "Scheduled"));
+        event.flight = flight;
+        if (day.events == null) day.events = new ArrayList<>();
+        day.events.add(event);
+        activeSection = SECTION_FLIGHTS;
+        commit(user);
+        toast(flight.number + " added from live AeroDataBox data");
     }
 
     /** Adds a new flight to the active day, matching the website's "Track a flight" form. */

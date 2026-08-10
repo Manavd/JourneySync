@@ -25,10 +25,15 @@ type AeroFlight = {
 };
 
 type FlightRequest = {
+  searchMode?: unknown;
   flightNumber?: unknown;
   departureDate?: unknown;
   origin?: unknown;
   destination?: unknown;
+};
+
+type AeroFids = {
+  departures?: AeroFlight[] | null;
 };
 
 const DEFAULT_AERODATABOX_HOST = "aerodatabox.p.rapidapi.com";
@@ -112,6 +117,58 @@ function selectFlight(flights: AeroFlight[], origin: string, destination: string
   );
 }
 
+function normalizedFlight(match: AeroFlight, departureDate: string, origin = "", destination = "") {
+  const departureDelay = delayMinutes(match.departure);
+  const arrivalDelay = delayMinutes(match.arrival);
+  const delay = Math.max(departureDelay, arrivalDelay);
+  const lastUpdatedUtc = match.lastUpdatedUtc || new Date().toISOString();
+
+  return {
+    status: normalizeStatus(match.status, delay),
+    flight: {
+      number: match.number?.trim() || "Flight",
+      airline: match.airline?.name?.trim() || "Airline",
+      origin: airportCode(match.departure?.airport?.iata) || origin,
+      destination: airportCode(match.arrival?.airport?.iata) || destination,
+      departureDate,
+      departureTerminal: match.departure?.terminal?.trim() || "TBD",
+      arrivalTerminal: match.arrival?.terminal?.trim() || "TBD",
+      gate: match.departure?.gate?.trim() || "TBD",
+      arrivalGate: match.arrival?.gate?.trim() || "TBD",
+      scheduledDeparture: localClock(match.departure?.scheduledTime?.local),
+      estimatedDeparture: localClock(preferredTime(match.departure)),
+      scheduledArrival: localClock(match.arrival?.scheduledTime?.local),
+      estimatedArrival: localClock(preferredTime(match.arrival)),
+      delayMinutes: delay,
+      baggageClaim: match.arrival?.baggageBelt?.trim() || "TBD",
+      lastUpdated: "Live just now",
+      lastUpdatedUtc,
+      source: "AeroDataBox",
+    },
+  };
+}
+
+function providerHeaders(apiKey: string, apiHost: string): HeadersInit {
+  return {
+    "X-RapidAPI-Key": apiKey,
+    "X-RapidAPI-Host": apiHost,
+    Accept: "application/json",
+  };
+}
+
+async function providerJson(url: URL, apiKey: string, apiHost: string): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: providerHeaders(apiKey, apiHost) });
+  } catch {
+    throw new Error("unreachable");
+  }
+  if (response.status === 404 || response.status === 204) return null;
+  if (response.status === 429) throw new Error("rate-limit");
+  if (!response.ok) throw new Error(`provider-${response.status}`);
+  return response.json();
+}
+
 async function requireFirebaseUser(request: Request): Promise<string | null> {
   const authorization = request.headers.get("authorization") ?? "";
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
@@ -149,81 +206,61 @@ export async function POST(request: Request): Promise<Response> {
   const departureDate = typeof body.departureDate === "string" ? body.departureDate.trim() : "";
   const origin = airportCode(body.origin);
   const destination = airportCode(body.destination);
+  const searchMode = body.searchMode === "route" ? "route" : "number";
 
-  if (!/^[A-Z0-9]{2,8}$/.test(flightNumber)) {
+  if (searchMode === "number" && !/^[A-Z0-9]{2,8}$/.test(flightNumber)) {
     return json({ error: "Enter a valid airline flight number, such as AA100." }, 400);
   }
   if (!validDate(departureDate)) {
     return json({ error: "Choose the flight's local departure date." }, 400);
   }
-  if (!/^[A-Z]{3}$/.test(origin) || !/^[A-Z]{3}$/.test(destination)) {
+  if (searchMode === "route" && (!/^[A-Z]{3}$/.test(origin) || !/^[A-Z]{3}$/.test(destination))) {
     return json({ error: "Origin and destination must be three-letter airport codes." }, 400);
+  }
+  if (searchMode === "number" && ((origin && !/^[A-Z]{3}$/.test(origin)) || (destination && !/^[A-Z]{3}$/.test(destination)))) {
+    return json({ error: "Airport codes must contain three letters." }, 400);
   }
 
   const apiKey = process.env.AERODATABOX_API_KEY;
   const apiHost = process.env.AERODATABOX_API_HOST || DEFAULT_AERODATABOX_HOST;
   if (!apiKey) return json({ error: "Live flight tracking is not configured on this server yet." }, 503);
 
-  const endpoint = new URL(`https://${apiHost}/flights/number/${encodeURIComponent(flightNumber)}/${departureDate}`);
-  endpoint.searchParams.set("withAircraftImage", "false");
-  endpoint.searchParams.set("withLocation", "false");
-
-  let providerResponse: Response;
   try {
-    providerResponse = await fetch(endpoint, {
-      headers: {
-        "X-RapidAPI-Key": apiKey,
-        "X-RapidAPI-Host": apiHost,
-        Accept: "application/json",
-      },
-    });
-  } catch {
-    return json({ error: "AeroDataBox could not be reached. Try again shortly." }, 502);
-  }
+    if (searchMode === "route") {
+      const windows = [["00:00", "12:00"], ["12:00", "23:59"]] as const;
+      const departures: AeroFlight[] = [];
+      for (const [index, [from, to]] of windows.entries()) {
+        if (index > 0) await new Promise((resolve) => setTimeout(resolve, 1100));
+        const endpoint = new URL(`https://${apiHost}/flights/airports/iata/${origin}/${departureDate}T${from}/${departureDate}T${to}`);
+        endpoint.searchParams.set("direction", "Departure");
+        endpoint.searchParams.set("withLeg", "true");
+        endpoint.searchParams.set("withLocation", "false");
+        const data = (await providerJson(endpoint, apiKey, apiHost)) as AeroFids | null;
+        departures.push(...(Array.isArray(data?.departures) ? data.departures : []));
+      }
+      const matches = departures
+        .filter((flight) => airportCode(flight.arrival?.airport?.iata) === destination)
+        .filter((flight, index, all) => all.findIndex((item) => item.number === flight.number && item.departure?.scheduledTime?.local === flight.departure?.scheduledTime?.local) === index)
+        .slice(0, 20)
+        .map((flight) => normalizedFlight(flight, departureDate, origin, destination));
+      if (matches.length === 0) return json({ error: `No ${origin} to ${destination} flights were found on ${departureDate}.` }, 404);
+      return json({ uid, searchMode, flights: matches, source: "AeroDataBox" });
+    }
 
-  if (providerResponse.status === 404) {
-    return json({ error: `No live record was found for ${flightNumber} on ${departureDate}. Check the flight number, date, and route.` }, 404);
+    const endpoint = new URL(`https://${apiHost}/flights/number/${encodeURIComponent(flightNumber)}/${departureDate}`);
+    endpoint.searchParams.set("dateLocalRole", "Departure");
+    endpoint.searchParams.set("withAircraftImage", "false");
+    endpoint.searchParams.set("withLocation", "false");
+    const data = await providerJson(endpoint, apiKey, apiHost);
+    const flights = Array.isArray(data) ? (data as AeroFlight[]) : [];
+    const match = selectFlight(flights, origin, destination);
+    if (!match) return json({ error: `No live record was found for ${flightNumber} on ${departureDate}.` }, 404);
+    return json({ uid, searchMode, ...normalizedFlight(match, departureDate, origin, destination) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "rate-limit") return json({ error: "AeroDataBox is receiving searches too quickly. Wait a moment and try again." }, 429);
+    if (message === "unreachable") return json({ error: "AeroDataBox could not be reached. Try again shortly." }, 502);
+    const status = message.startsWith("provider-") ? message.slice("provider-".length) : "unknown";
+    return json({ error: `AeroDataBox returned an unexpected response (${status}).` }, 502);
   }
-  if (providerResponse.status === 429) {
-    return json({ error: "The monthly or per-second AeroDataBox allowance has been reached." }, 429);
-  }
-  if (!providerResponse.ok) {
-    return json({ error: `AeroDataBox returned an unexpected response (${providerResponse.status}).` }, 502);
-  }
-
-  const flights = (await providerResponse.json()) as AeroFlight[];
-  const match = selectFlight(Array.isArray(flights) ? flights : [], origin, destination);
-  if (!match) {
-    return json({ error: `No matching ${origin} to ${destination} flight was found for that date.` }, 404);
-  }
-
-  const departureDelay = delayMinutes(match.departure);
-  const arrivalDelay = delayMinutes(match.arrival);
-  const delay = Math.max(departureDelay, arrivalDelay);
-  const lastUpdatedUtc = match.lastUpdatedUtc || new Date().toISOString();
-
-  return json({
-    uid,
-    flight: {
-      number: match.number?.trim() || flightNumber,
-      airline: match.airline?.name?.trim() || "Airline",
-      origin: airportCode(match.departure?.airport?.iata) || origin,
-      destination: airportCode(match.arrival?.airport?.iata) || destination,
-      departureDate,
-      departureTerminal: match.departure?.terminal?.trim() || "TBD",
-      arrivalTerminal: match.arrival?.terminal?.trim() || "TBD",
-      gate: match.departure?.gate?.trim() || "TBD",
-      arrivalGate: match.arrival?.gate?.trim() || "TBD",
-      scheduledDeparture: localClock(match.departure?.scheduledTime?.local),
-      estimatedDeparture: localClock(preferredTime(match.departure)),
-      scheduledArrival: localClock(match.arrival?.scheduledTime?.local),
-      estimatedArrival: localClock(preferredTime(match.arrival)),
-      delayMinutes: delay,
-      baggageClaim: match.arrival?.baggageBelt?.trim() || "TBD",
-      lastUpdated: "Live just now",
-      lastUpdatedUtc,
-      source: "AeroDataBox",
-    },
-    status: normalizeStatus(match.status, delay),
-  });
 }
