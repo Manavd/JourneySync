@@ -724,7 +724,7 @@ public class MainActivity extends android.app.Activity {
             weather.addView(text(snapshot.destination, 19, NAVY, true));
             weather.addView(text(snapshot.day + "  ·  " + snapshot.description, 13, MUTED, false), margins(0, 3, 0, 8));
             weather.addView(text(snapshot.icon + "  " + snapshot.high + " / " + snapshot.low, 28, NAVY, true));
-            weather.addView(text("Rain chance " + snapshot.rain + "  ·  Live from Open-Meteo", 12, FAINT, false), margins(0, 5, 0, 10));
+            weather.addView(text("Rain " + snapshot.rain + "  ·  Live from " + snapshot.source, 12, FAINT, false), margins(0, 5, 0, 10));
         }
         Button refresh = outlineButton("Refresh weather");
         refresh.setOnClickListener(v -> {
@@ -773,6 +773,7 @@ public class MainActivity extends android.app.Activity {
                 result.rain = day.optString("rain", "TBD");
                 result.icon = day.optString("icon", "");
                 result.description = day.optString("desc", "Live conditions");
+                result.source = response.optString("source", "JourneySync weather");
             } catch (Exception error) {
                 result.error = error.getMessage() == null ? "Live weather could not be loaded." : error.getMessage();
             } finally {
@@ -3001,6 +3002,7 @@ public class MainActivity extends android.app.Activity {
         String rain;
         String icon;
         String description;
+        String source;
         String error;
     }
 

@@ -107,6 +107,67 @@ test("weather endpoint geocodes the selected city and returns a no-cache forecas
   }
 });
 
+test("weather endpoint falls back to MET Norway when Open-Meteo forecast is unavailable", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      if (url.hostname === "geocoding-api.open-meteo.com") {
+        return Response.json({
+          results: [{
+            name: "Chicago",
+            admin1: "Illinois",
+            country: "United States",
+            country_code: "US",
+            timezone: "America/Chicago",
+            latitude: 41.8781,
+            longitude: -87.6298,
+          }],
+        });
+      }
+      if (url.hostname === "api.open-meteo.com") return new Response("rate limited", { status: 429 });
+      if (url.hostname === "api.met.no") {
+        assert.equal(url.searchParams.get("lat"), "41.8781");
+        assert.equal(url.searchParams.get("lon"), "-87.6298");
+        assert.match(new Headers(init?.headers).get("user-agent") ?? "", /JourneySync/i);
+        return Response.json({
+          properties: {
+            timeseries: [
+              {
+                time: "2026-08-10T12:00:00Z",
+                data: {
+                  instant: { details: { air_temperature: 20 } },
+                  next_1_hours: { summary: { symbol_code: "partlycloudy_day" }, details: { precipitation_amount: 0 } },
+                },
+              },
+              {
+                time: "2026-08-10T18:00:00Z",
+                data: {
+                  instant: { details: { air_temperature: 25 } },
+                  next_1_hours: { summary: { symbol_code: "clearsky_day" }, details: { precipitation_amount: 0.4 } },
+                },
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const response = await render("/api/weather?city=Chicago&region=Illinois&country=United%20States&countryCode=US");
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("cache-control") ?? "", /no-store/i);
+    const body = await response.json();
+    assert.equal(body.destination, "Chicago");
+    assert.equal(body.days[0].high, "77°F");
+    assert.equal(body.days[0].low, "68°F");
+    assert.equal(body.days[0].rain, "0.4 mm");
+    assert.equal(body.source, "MET Norway");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("live flight endpoint rejects unauthenticated requests", async () => {
   const response = await render("/api/flights/status", {
     method: "POST",
