@@ -57,6 +57,16 @@ test("server-renders the JourneySync travel application", async () => {
   assert.doesNotMatch(pageBundle, /journeysync_mock_user/i);
 });
 
+test("release endpoint is never cached and reports the deployed build", async () => {
+  const response = await render("/api/version");
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("cache-control") ?? "", /no-store/i);
+  assert.match(response.headers.get("cache-control") ?? "", /no-cache/i);
+  const body = await response.json();
+  assert.equal(typeof body.version, "string");
+  assert.ok(body.version.length > 0);
+});
+
 test("weather endpoint geocodes the selected city and returns a no-cache forecast", async () => {
   const originalFetch = globalThis.fetch;
   try {

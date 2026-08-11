@@ -34,6 +34,8 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async () => {
+  const buildId = process.env.JOURNEYSYNC_BUILD_ID ?? new Date().toISOString();
+
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
@@ -44,6 +46,9 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    define: {
+      __JOURNEYSYNC_BUILD_ID__: JSON.stringify(buildId),
+    },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
