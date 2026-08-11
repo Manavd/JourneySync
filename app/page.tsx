@@ -622,6 +622,7 @@ export default function Home() {
   const [weatherLocationKey, setWeatherLocationKey] = useState("");
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState("");
+  const mapGeocodeAttemptsRef = useRef(new Set<string>());
 
   // Auth Listener & Firestore Sync
   useEffect(() => {
@@ -870,6 +871,45 @@ export default function Home() {
 
     return () => controller.abort();
   }, [activeTrip?.id, tripCity, tripRegion, tripCountry, inferredCountryCode, requestedWeatherKey]);
+
+  // Older saved pins predate coordinate storage. Resolve them one at a time
+  // when the map is opened, then let the normal profile sync persist them.
+  useEffect(() => {
+    if (activeNav !== "Map" || !activeTrip?.id) return;
+    const missingPins = mapPins.filter((pin) =>
+      typeof pin.latitude !== "number" || typeof pin.longitude !== "number",
+    ).filter((pin) => !mapGeocodeAttemptsRef.current.has(`${activeTrip.id}:${pin.name}`));
+    if (missingPins.length === 0) return;
+
+    const controller = new AbortController();
+    void (async () => {
+      for (const [index, pin] of missingPins.entries()) {
+        const attemptKey = `${activeTrip.id}:${pin.name}`;
+        mapGeocodeAttemptsRef.current.add(attemptKey);
+        if (index > 0) await new Promise((resolve) => window.setTimeout(resolve, 1100));
+        if (controller.signal.aborted) return;
+        try {
+          const location = [pin.name, tripCity, tripRegion, tripCountry].filter(Boolean).join(", ");
+          const query = new URLSearchParams({ q: location, countryCode: inferredCountryCode });
+          const response = await fetch(`/api/geocode?${query.toString()}`, { cache: "no-store", signal: controller.signal });
+          const body = await response.json() as { latitude?: number; longitude?: number };
+          if (!response.ok || typeof body.latitude !== "number" || typeof body.longitude !== "number") continue;
+          setSavedTrips((trips) => trips.map((trip) => trip.id === activeTrip.id ? {
+            ...trip,
+            mapPins: trip.mapPins.map((savedPin) => savedPin.name === pin.name ? {
+              ...savedPin,
+              latitude: body.latitude,
+              longitude: body.longitude,
+            } : savedPin),
+          } : trip));
+        } catch (error) {
+          if (!controller.signal.aborted) console.warn(`Could not locate saved map pin ${pin.name}.`, error);
+        }
+      }
+    })();
+
+    return () => controller.abort();
+  }, [activeNav, activeTrip?.id, mapPins, tripCity, tripRegion, tripCountry, inferredCountryCode]);
 
   const weatherIsCurrent = weatherLocationKey === requestedWeatherKey;
   const currentWeatherError = !tripCity ? "Choose a city in trip details." : weatherIsCurrent ? weatherError : "";
