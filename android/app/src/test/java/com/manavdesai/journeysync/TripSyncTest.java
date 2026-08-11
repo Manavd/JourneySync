@@ -14,6 +14,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
 
 /**
  * The Android and web clients share one Firestore document, so these tests pin
@@ -57,6 +59,7 @@ public class TripSyncTest {
         day.put("date", "12");
         day.put("short", "SAT");
         day.put("label", "Arrival in Zürich");
+        day.put("isoDate", "2026-09-12");
         day.put("events", new ArrayList<>(Arrays.asList(event)));
 
         Map<String, Object> trip = new LinkedHashMap<>();
@@ -64,6 +67,13 @@ public class TripSyncTest {
         trip.put("name", "Swiss Escape");
         trip.put("route", "Zürich → Interlaken → Zermatt");
         trip.put("startDate", "2026-09-12");
+        trip.put("endDate", "2026-09-20");
+        trip.put("countryCode", "CH");
+        trip.put("country", "Switzerland");
+        trip.put("regionCode", "ZH");
+        trip.put("region", "Zurich");
+        trip.put("city", "Zurich");
+        trip.put("currency", "CHF");
         trip.put("travelersCount", 4L);
         trip.put("days", new ArrayList<>(Arrays.asList(day)));
         Map<String, Object> expense = new LinkedHashMap<>();
@@ -96,6 +106,9 @@ public class TripSyncTest {
         assertNotNull(trip);
         assertEquals("Swiss Escape", trip.name);
         assertEquals(4, trip.travelersCount);
+        assertEquals("CHF", trip.currency);
+        assertEquals("2026-09-20", trip.endDate);
+        assertEquals("2026-09-12", trip.days.get(0).isoDate);
 
         List<Trip.TrackedFlight> flights = trip.trackedFlights();
         assertEquals(1, flights.size());
@@ -252,5 +265,32 @@ public class TripSyncTest {
         assertEquals(240_000L, MainActivity.backoffMillis(3));
         assertEquals(1_800_000L, MainActivity.backoffMillis(9));
         assertEquals(1_800_000L, MainActivity.backoffMillis(500));
+    }
+
+    @Test
+    public void archivesTheDayAfterTheLatestItineraryDate() throws Exception {
+        Trip trip = Trip.fromMap(webTripDocument());
+        trip.endDate = "2026-11-10";
+        trip.days.get(0).isoDate = "2026-11-12";
+        SimpleDateFormat dates = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+        dates.setLenient(false);
+
+        assertFalse(trip.isCompleted(dates.parse("2026-11-12").getTime()));
+        assertTrue(trip.isCompleted(dates.parse("2026-11-13").getTime()));
+        assertTrue(trip.isArchived(dates.parse("2026-11-13").getTime()));
+    }
+
+    @Test
+    public void manualArchiveAndLocationFieldsRoundTrip() {
+        Trip trip = Trip.fromMap(webTripDocument());
+        trip.archivedAt = "2026-08-10T12:00:00Z";
+        Map<String, Object> saved = trip.toMap();
+
+        assertEquals("CH", saved.get("countryCode"));
+        assertEquals("Zurich", saved.get("city"));
+        assertEquals("CHF", saved.get("currency"));
+        assertEquals("2026-08-10T12:00:00Z", saved.get("archivedAt"));
+        trip.archivedAt = "";
+        assertFalse(trip.toMap().containsKey("archivedAt"));
     }
 }

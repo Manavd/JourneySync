@@ -4,6 +4,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -51,7 +52,6 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.HashSet;
@@ -68,17 +68,20 @@ import java.text.SimpleDateFormat;
 /** A native Android JourneySync experience backed by Firebase Authentication and Firestore with full website feature parity. */
 public class MainActivity extends android.app.Activity {
     private static final int RC_GOOGLE_SIGN_IN = 4021;
-    /** Claude design reference: warm paper, near-black ink, and signal red. */
-    private static final String BLUE = "#EC3013";
-    private static final String INK = "#201E1D";
-    private static final String SURFACE = "#F3F2F2";
-    private static final String CORAL = "#EC3013";
+    /** Shared JourneySync palette used by the current website. */
+    private static final String BLUE = "#89B8D8";
+    private static final String INK = "#1B2731";
+    private static final String SURFACE = "#FFFDF8";
+    private static final String CORAL = "#EF7159";
+    private static final String NAVY = "#17212B";
+    private static final String CREAM = "#F4F1EA";
+    private static final String MINT = "#B9DDC7";
     private static final String GREEN = "#1D7A48";
     private static final String ORANGE = "#D97706";
     private static final String PURPLE = "#7C3AED";
-    private static final String MUTED = "#605D5D";
-    private static final String FAINT = "#7D7979";
-    private static final String LINE = "#D7D3D3";
+    private static final String MUTED = "#72808A";
+    private static final String FAINT = "#7B8990";
+    private static final String LINE = "#DEDBD2";
 
     private static final int SECTION_OVERVIEW = 0;
     private static final int SECTION_ITINERARY = 1;
@@ -120,6 +123,10 @@ public class MainActivity extends android.app.Activity {
     private String activeTripId = "";
     private int activeDayIndex = 0;
     private int activeSection = SECTION_OVERVIEW;
+    private boolean showingTripLibrary = true;
+    private boolean showArchivedTrips = false;
+    private final Map<String, WeatherSnapshot> weatherByTrip = new HashMap<>();
+    private final Set<String> weatherLoading = new HashSet<>();
 
     /**
      * The uid whose screen is currently on display, so returning to the
@@ -169,6 +176,16 @@ public class MainActivity extends android.app.Activity {
         super.onPause();
     }
 
+    @Override
+    protected void onDestroy() {
+        stopFlightRefreshLoop();
+        if (tripsListener != null) {
+            tripsListener.remove();
+            tripsListener = null;
+        }
+        super.onDestroy();
+    }
+
     private void showCurrentState() {
         FirebaseUser user = firebaseAuth == null ? null : firebaseAuth.getCurrentUser();
         String uid = user == null ? null : user.getUid();
@@ -176,6 +193,18 @@ public class MainActivity extends android.app.Activity {
         // dashboard would render (and refetch) twice, which could also create
         // two starter itineraries for a brand-new account.
         if (screen != null && equalIds(uid, renderedUid)) return;
+        if (user != null && renderedUid != null && !user.getUid().equals(renderedUid)) {
+            if (tripsListener != null) {
+                tripsListener.remove();
+                tripsListener = null;
+            }
+            savedTrips.clear();
+            activeTripId = "";
+            activeDayIndex = 0;
+            showingTripLibrary = true;
+            showArchivedTrips = false;
+            tripsLoaded = false;
+        }
         if (user == null) {
             showLogin();
         } else {
@@ -206,15 +235,19 @@ public class MainActivity extends android.app.Activity {
             tripsListener = null;
         }
         prepareScreen();
+        getWindow().getDecorView().setSystemUiVisibility(0);
         renderedUid = null;
         tripsLoaded = false;
+        showingTripLibrary = true;
+        showArchivedTrips = false;
         savedTrips.clear();
+        weatherByTrip.clear();
         authButtons.clear();
 
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.VERTICAL);
         hero.setPadding(dp(20), dp(28), dp(20), dp(28));
-        hero.setBackgroundColor(Color.parseColor(BLUE));
+        hero.setBackgroundColor(Color.parseColor(NAVY));
         hero.addView(text("JOURNEYSYNC", 13, "#FFFFFF", true));
         hero.addView(text("Every plan.\nEvery person.\nOne journey.", 32, "#FFFFFF", true), margins(0, 14, 0, 0));
         screen.addView(hero, margins(-20, -20, -20, 30));
@@ -324,9 +357,10 @@ public class MainActivity extends android.app.Activity {
 
     private void showDashboard(FirebaseUser user) {
         prepareScreen();
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         renderedUid = user.getUid();
         if (tripsLoaded) {
-            renderDashboard(user);
+            renderCurrentView(user);
             return;
         }
         screen.addView(text("JourneySync", 25, BLUE, true));
@@ -344,15 +378,11 @@ public class MainActivity extends android.app.Activity {
     private void loadTrips(FirebaseUser user) {
         if (tripsListener != null) tripsListener.remove();
         tripsListener = allTripsDoc(user).addSnapshotListener((snapshot, error) -> {
+            if (!user.getUid().equals(renderedUid)) return;
             if (error != null) {
                 tripsLoaded = true;
-                if (savedTrips.isEmpty()) {
-                    Trip defaultTrip = createDefaultTrip();
-                    savedTrips.add(defaultTrip);
-                    activeTripId = defaultTrip.id;
-                }
-                renderDashboard(user);
-                toast("Showing saved itinerary while cloud sync reconnects.");
+                renderCurrentView(user);
+                toast("Cloud sync is unavailable. Device changes will sync when Firebase reconnects.");
                 return;
             }
             if (snapshot == null) return;
@@ -372,16 +402,12 @@ public class MainActivity extends android.app.Activity {
             }
             tripsLoaded = true;
             if (savedTrips.isEmpty()) {
-                Trip defaultTrip = createDefaultTrip();
-                savedTrips.add(defaultTrip);
-                activeTripId = defaultTrip.id;
-                renderDashboard(user);
-                saveTrips(user);
+                activeTripId = "";
             } else {
                 Trip active = findTrip(activeTripId);
                 if (active == null) activeTripId = savedTrips.get(0).id;
-                renderDashboard(user);
             }
+            renderCurrentView(user);
         });
     }
 
@@ -400,8 +426,13 @@ public class MainActivity extends android.app.Activity {
 
     /** Re-renders the dashboard and pushes the change to Firestore. */
     private void commit(FirebaseUser user) {
-        renderDashboard(user);
+        renderCurrentView(user);
         saveTrips(user);
+    }
+
+    private void renderCurrentView(FirebaseUser user) {
+        if (showingTripLibrary) renderTripLibrary(user);
+        else renderDashboard(user);
     }
 
     private Trip findTrip(String tripId) {
@@ -426,14 +457,108 @@ public class MainActivity extends android.app.Activity {
         return trip.days.get(activeDayIndex);
     }
 
+    private void renderTripLibrary(FirebaseUser user) {
+        screen.removeAllViews();
+        while (appRoot != null && appRoot.getChildCount() > 1) appRoot.removeViewAt(1);
+        showingTripLibrary = true;
+        stopFlightRefreshLoop();
+
+        LinearLayout heading = new LinearLayout(this);
+        heading.setOrientation(LinearLayout.HORIZONTAL);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout title = new LinearLayout(this);
+        title.setOrientation(LinearLayout.VERTICAL);
+        title.addView(text("JOURNEYSYNC", 12, CORAL, true));
+        title.addView(text("Your trips", 31, NAVY, true), margins(0, 5, 0, 2));
+        title.addView(text("Saved to " + safeEmail(user), 13, MUTED, false));
+        heading.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Button signOut = outlineButton("Sign out");
+        signOut.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        signOut.setOnClickListener(v -> signOut());
+        heading.addView(signOut);
+        screen.addView(heading, margins(0, 0, 0, 22));
+
+        int activeCount = 0;
+        int archivedCount = 0;
+        long now = System.currentTimeMillis();
+        for (Trip trip : savedTrips) {
+            if (trip != null && trip.isArchived(now)) archivedCount++;
+            else if (trip != null) activeCount++;
+        }
+
+        LinearLayout filters = new LinearLayout(this);
+        filters.setOrientation(LinearLayout.HORIZONTAL);
+        Button activeFilter = showArchivedTrips ? outlineButton("Active " + activeCount) : primaryButton("Active " + activeCount);
+        Button archiveFilter = showArchivedTrips ? primaryButton("Archived " + archivedCount) : outlineButton("Archived " + archivedCount);
+        activeFilter.setOnClickListener(v -> { showArchivedTrips = false; renderTripLibrary(user); });
+        archiveFilter.setOnClickListener(v -> { showArchivedTrips = true; renderTripLibrary(user); });
+        filters.addView(activeFilter, new LinearLayout.LayoutParams(0, dp(50), 1));
+        LinearLayout.LayoutParams archiveParams = new LinearLayout.LayoutParams(0, dp(50), 1);
+        archiveParams.setMargins(dp(8), 0, 0, 0);
+        filters.addView(archiveFilter, archiveParams);
+        screen.addView(filters, margins(0, 0, 0, 14));
+
+        Button create = primaryButton("Create a trip");
+        create.setOnClickListener(v -> showCreateTripDialog(user));
+        screen.addView(create, margins(0, 0, 0, 20));
+
+        int shown = 0;
+        for (Trip trip : savedTrips) {
+            if (trip == null || trip.isArchived(now) != showArchivedTrips) continue;
+            shown++;
+            LinearLayout tripCard = card();
+            String status = trip.isCompleted(now) ? "COMPLETED" : trip.isManuallyArchived() ? "ARCHIVED" : "ACTIVE OR UPCOMING";
+            tripCard.addView(text(status, 11, trip.isArchived(now) ? MUTED : GREEN, true));
+            tripCard.addView(text(safeText(trip.name, "Untitled trip"), 24, NAVY, true), margins(0, 7, 0, 3));
+            tripCard.addView(text(safeText(trip.route, locationLabel(trip)), 14, MUTED, false));
+            tripCard.addView(text(tripDateRange(trip) + "  ·  " + Math.max(1, trip.travelersCount) + " travelers", 12, FAINT, false), margins(0, 5, 0, 14));
+            if (trip.isCompleted(now)) {
+                tripCard.addView(text("The trip finished, so it was archived automatically. Your itinerary is still here.", 13, MUTED, false), margins(0, 0, 0, 12));
+            }
+
+            Button open = primaryButton("Open trip");
+            open.setOnClickListener(v -> {
+                activeTripId = trip.id;
+                activeDayIndex = 0;
+                activeSection = SECTION_OVERVIEW;
+                showingTripLibrary = false;
+                commit(user);
+            });
+            tripCard.addView(open, margins(0, 0, 0, 9));
+
+            if (!trip.isCompleted(now)) {
+                Button archive = outlineButton(trip.isManuallyArchived() ? "Restore trip" : "Archive trip");
+                archive.setOnClickListener(v -> {
+                    trip.archivedAt = trip.isManuallyArchived() ? "" : utcTimestamp(System.currentTimeMillis());
+                    if (trip.id != null && trip.id.equals(activeTripId)) showingTripLibrary = true;
+                    commit(user);
+                    toast(trip.isManuallyArchived() ? "Trip archived." : "Trip restored to active trips.");
+                });
+                tripCard.addView(archive, margins(0, 0, 0, 9));
+            }
+
+            Button delete = dangerButton("Delete permanently");
+            delete.setOnClickListener(v -> confirmDeleteTrip(user, trip));
+            tripCard.addView(delete);
+            screen.addView(tripCard, margins(0, 0, 0, 14));
+        }
+
+        if (shown == 0) {
+            LinearLayout empty = card();
+            empty.addView(text(showArchivedTrips ? "No archived trips" : "No active trips", 21, NAVY, true));
+            empty.addView(text(showArchivedTrips ? "Completed and manually archived trips will appear here." : "Create a trip to start planning.", 14, MUTED, false), margins(0, 6, 0, 0));
+            screen.addView(empty);
+        }
+    }
+
     private void renderDashboard(FirebaseUser user) {
         screen.removeAllViews();
         while (appRoot != null && appRoot.getChildCount() > 1) appRoot.removeViewAt(1);
         Trip activeTrip = getActiveTrip();
         if (activeTrip == null) {
-            activeTrip = createDefaultTrip();
-            savedTrips.add(activeTrip);
-            activeTripId = activeTrip.id;
+            showingTripLibrary = true;
+            renderTripLibrary(user);
+            return;
         }
         final Trip trip = activeTrip;
         Day activeDay = getActiveDay(trip);
@@ -449,7 +574,7 @@ public class MainActivity extends android.app.Activity {
         meta.setLetterSpacing(.08f);
         identity.addView(meta);
         identity.addView(text(safeText(trip.name, "YOUR JOURNEY"), 28, INK, true), margins(0, 7, 0, 4));
-        identity.addView(text(safeText(trip.route, "Route not set") + "  ·  " + safeText(trip.startDate, "Date not set"), 13, MUTED, false));
+        identity.addView(text(safeText(trip.route, locationLabel(trip)) + "  ·  " + tripDateRange(trip), 13, MUTED, false));
         top.addView(identity, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
         Button menu = squareButton("+");
@@ -474,6 +599,27 @@ public class MainActivity extends android.app.Activity {
         else renderItinerary(user, trip, activeDay);
 
         addBottomNavigation(user);
+    }
+
+    private void renderEmptyDashboard(FirebaseUser user) {
+        screen.addView(text("JOURNEYSYNC", 13, BLUE, true));
+        screen.addView(text("Create your first trip", 30, INK, true), margins(0, 18, 0, 8));
+        screen.addView(text("Build any itinerary you want. Days, activities, flights, expenses, passes, places, and travelers will be saved to your Firebase profile.",
+                15, MUTED, false), margins(0, 0, 0, 24));
+
+        Button create = primaryButton("Create an itinerary");
+        create.setOnClickListener(v -> showCreateTripDialog(user));
+        screen.addView(create, margins(0, 0, 0, 12));
+
+        Button signOut = outlineButton("Sign out");
+        signOut.setOnClickListener(v -> {
+            firebaseAuth.signOut();
+            googleClient.signOut();
+            activeSection = SECTION_OVERVIEW;
+            activeDayIndex = 0;
+            showLogin();
+        });
+        screen.addView(signOut);
     }
 
     private void addBottomNavigation(FirebaseUser user) {
@@ -536,6 +682,8 @@ public class MainActivity extends android.app.Activity {
             screen.addView(emptyAgenda, margins(0, 0, 0, 24));
         }
 
+        renderWeatherCard(user, trip);
+
         screen.addView(sectionLabel("TRAVEL TOOLS"), margins(0, 0, 0, 8));
         screen.addView(sectionLink("FLIGHT TRACKER", "Live gates, terminals, timing and delay status", () -> {
             activeSection = SECTION_FLIGHTS;
@@ -559,6 +707,83 @@ public class MainActivity extends android.app.Activity {
         summary.addView(factRow("YOU ARE TRACKING", money(expenseCurrency(trip), trip.unsettledExpenses()), INK,
                 "WALLET", String.valueOf(trip.walletDocs == null ? 0 : trip.walletDocs.size()) + " DOCUMENTS", INK), margins(0, 14, 0, 0));
         screen.addView(summary);
+    }
+
+    private void renderWeatherCard(FirebaseUser user, Trip trip) {
+        if (trip == null || trip.city == null || trip.city.trim().isEmpty()) return;
+        screen.addView(sectionLabel("LIVE WEATHER"), margins(0, 0, 0, 10));
+        LinearLayout weather = card();
+        WeatherSnapshot snapshot = weatherByTrip.get(trip.id);
+        if (snapshot == null) {
+            weather.addView(text("Loading weather for " + locationLabel(trip) + "…", 15, MUTED, false));
+            if (!weatherLoading.contains(trip.id)) fetchWeather(user, trip);
+        } else if (snapshot.error != null) {
+            weather.addView(text("Weather is unavailable", 19, NAVY, true));
+            weather.addView(text(snapshot.error, 13, MUTED, false), margins(0, 5, 0, 10));
+        } else {
+            weather.addView(text(snapshot.destination, 19, NAVY, true));
+            weather.addView(text(snapshot.day + "  ·  " + snapshot.description, 13, MUTED, false), margins(0, 3, 0, 8));
+            weather.addView(text(snapshot.icon + "  " + snapshot.high + " / " + snapshot.low, 28, NAVY, true));
+            weather.addView(text("Rain chance " + snapshot.rain + "  ·  Live from Open-Meteo", 12, FAINT, false), margins(0, 5, 0, 10));
+        }
+        Button refresh = outlineButton("Refresh weather");
+        refresh.setOnClickListener(v -> {
+            weatherByTrip.remove(trip.id);
+            fetchWeather(user, trip);
+            renderDashboard(user);
+        });
+        weather.addView(refresh);
+        screen.addView(weather, margins(0, 0, 0, 24));
+    }
+
+    private void fetchWeather(FirebaseUser user, Trip trip) {
+        if (trip == null || trip.id == null || weatherLoading.contains(trip.id)) return;
+        weatherLoading.add(trip.id);
+        final String tripId = trip.id;
+        Uri uri = Uri.parse(BuildConfig.FLIGHT_API_BASE_URL + "/api/weather").buildUpon()
+                .appendQueryParameter("city", safeText(trip.city, ""))
+                .appendQueryParameter("region", safeText(trip.region, ""))
+                .appendQueryParameter("country", safeText(trip.country, ""))
+                .appendQueryParameter("countryCode", safeText(trip.countryCode, ""))
+                .appendQueryParameter("refresh", String.valueOf(System.currentTimeMillis()))
+                .build();
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+            WeatherSnapshot result = new WeatherSnapshot();
+            try {
+                connection = (HttpURLConnection) new URL(uri.toString()).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(15_000);
+                connection.setReadTimeout(25_000);
+                connection.setUseCaches(false);
+                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Cache-Control", "no-cache, no-store, max-age=0");
+                connection.setRequestProperty("Pragma", "no-cache");
+                int status = connection.getResponseCode();
+                InputStream stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
+                JSONObject response = new JSONObject(readResponse(stream));
+                if (status < 200 || status >= 300) throw new IllegalStateException(response.optString("error", "Live weather could not be loaded."));
+                JSONArray days = response.optJSONArray("days");
+                if (days == null || days.length() == 0) throw new IllegalStateException("No forecast is available for this city.");
+                JSONObject day = days.getJSONObject(0);
+                result.destination = response.optString("destination", trip.city);
+                result.day = day.optString("day", "Today");
+                result.high = day.optString("high", "TBD");
+                result.low = day.optString("low", "TBD");
+                result.rain = day.optString("rain", "TBD");
+                result.icon = day.optString("icon", "");
+                result.description = day.optString("desc", "Live conditions");
+            } catch (Exception error) {
+                result.error = error.getMessage() == null ? "Live weather could not be loaded." : error.getMessage();
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+            runOnUiThread(() -> {
+                weatherLoading.remove(tripId);
+                weatherByTrip.put(tripId, result);
+                if (!showingTripLibrary && tripId.equals(activeTripId) && activeSection == SECTION_OVERVIEW) renderDashboard(user);
+            });
+        }).start();
     }
 
     private void renderMap(FirebaseUser user, Trip trip) {
@@ -1810,14 +2035,13 @@ public class MainActivity extends android.app.Activity {
         LinearLayout form = formContainer();
         EditText description = input("What was purchased?", InputType.TYPE_CLASS_TEXT, "");
         EditText amount = input("0.00", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL, "");
-        EditText currency = input("Currency", InputType.TYPE_CLASS_TEXT, expenseCurrency(trip));
         EditText paidBy = input("Traveler name", InputType.TYPE_CLASS_TEXT,
                 trip.travelersList != null && !trip.travelersList.isEmpty() ? trip.travelersList.get(0).name : "Traveler");
         EditText category = input("Dining, Transport, Lodging…", InputType.TYPE_CLASS_TEXT, "Other");
         EditText date = input("Date label", InputType.TYPE_CLASS_TEXT, "Today");
         addField(form, "Description", description);
         addField(form, "Amount", amount);
-        addField(form, "Currency", currency);
+        form.addView(text("Currency: " + expenseCurrency(trip) + " based on " + safeText(trip.country, "the trip location"), 13, MUTED, true), margins(0, 0, 0, 12));
         addField(form, "Paid by", paidBy);
         addField(form, "Category", category);
         addField(form, "Date", date);
@@ -1832,7 +2056,7 @@ public class MainActivity extends android.app.Activity {
                     expense.id = "exp-" + System.currentTimeMillis();
                     expense.description = fallback(description, "Trip expense");
                     expense.amount = value;
-                    expense.currency = fallback(currency, "USD").toUpperCase();
+                    expense.currency = expenseCurrency(trip);
                     expense.paidBy = fallback(paidBy, "Traveler");
                     expense.category = fallback(category, "Other");
                     expense.date = fallback(date, "Today");
@@ -1978,21 +2202,28 @@ public class MainActivity extends android.app.Activity {
     // ---------------------------------------------------------------- trips
 
     private void showTripSwitcherDialog(FirebaseUser user) {
-        if (savedTrips.isEmpty()) return;
-        String[] names = new String[savedTrips.size()];
-        for (int i = 0; i < savedTrips.size(); i++) {
-            Trip t = savedTrips.get(i);
+        List<Trip> available = new ArrayList<>();
+        for (Trip trip : savedTrips) if (trip != null && !trip.isArchived(System.currentTimeMillis())) available.add(trip);
+        if (available.isEmpty()) {
+            showingTripLibrary = true;
+            renderTripLibrary(user);
+            return;
+        }
+        String[] names = new String[available.size()];
+        for (int i = 0; i < available.size(); i++) {
+            Trip t = available.get(i);
             String name = t != null ? safeText(t.name, "Trip") : "Trip";
             boolean isActive = t != null && t.id != null && t.id.equals(activeTripId);
             names[i] = name + (isActive ? " (Active)" : "");
         }
         new AlertDialog.Builder(this)
-                .setTitle("Select Itinerary (" + savedTrips.size() + ")")
+                .setTitle("Select active trip (" + available.size() + ")")
                 .setItems(names, (dialog, which) -> {
-                    Trip selected = savedTrips.get(which);
+                    Trip selected = available.get(which);
                     if (selected != null) {
                         activeTripId = selected.id;
                         activeDayIndex = 0;
+                        showingTripLibrary = false;
                         // Persist the switch so the web app opens the same trip.
                         commit(user);
                         toast("Switched to \"" + selected.name + "\"");
@@ -2004,84 +2235,164 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void showCreateTripDialog(FirebaseUser user) {
+        showTripDetailsDialog(user, null);
+    }
+
+    private void showTripDetailsDialog(FirebaseUser user, Trip existing) {
         LinearLayout form = formContainer();
-
-        EditText nameInput = input("Trip Name (e.g. Alpine Adventure)", InputType.TYPE_CLASS_TEXT, "");
-        EditText routeInput = input("Route (e.g. Zürich → Zermatt)", InputType.TYPE_CLASS_TEXT, "");
-        EditText startInput = input("Start Date (YYYY-MM-DD)", InputType.TYPE_CLASS_TEXT, "2026-08-01");
-        EditText travelersInput = input("Number of Travelers (e.g. 2)", InputType.TYPE_CLASS_NUMBER, "2");
-
+        EditText nameInput = input("Trip name", InputType.TYPE_CLASS_TEXT, existing == null ? "" : existing.name);
+        Spinner countrySpinner = new Spinner(this);
+        Spinner regionSpinner = new Spinner(this);
+        Spinner citySpinner = new Spinner(this);
+        countrySpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, LocationData.countryNames()));
+        int initialCountryIndex = existing == null ? 0 : LocationData.countryIndex(existing.countryCode);
+        LocationData.Country initialCountry = LocationData.COUNTRIES.get(initialCountryIndex);
+        List<String> initialRegions = new ArrayList<>();
+        for (LocationData.Region region : initialCountry.regions) initialRegions.add(region.name);
+        regionSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, initialRegions));
+        int initialRegionIndex = existing == null ? 0 : LocationData.regionIndex(initialCountry, existing.regionCode);
+        LocationData.Region initialRegion = initialCountry.regions.get(initialRegionIndex);
+        citySpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, initialRegion.cities));
+        countrySpinner.setSelection(initialCountryIndex);
+        regionSpinner.setSelection(initialRegionIndex);
+        if (existing != null) {
+            int initialCityIndex = initialRegion.cities.indexOf(existing.city);
+            if (initialCityIndex >= 0) citySpinner.setSelection(initialCityIndex);
+        }
+        EditText startInput = input("YYYY-MM-DD", InputType.TYPE_CLASS_DATETIME, existing == null ? todayIso() : existing.startDate);
+        EditText endInput = input("YYYY-MM-DD", InputType.TYPE_CLASS_DATETIME, existing == null ? todayIso() : existing.endDate);
+        EditText travelersInput = input("Number of travelers", InputType.TYPE_CLASS_NUMBER, existing == null ? "1" : String.valueOf(Math.max(1, existing.travelersCount)));
+        TextView currencyNote = text("Expenses will use " + initialCountry.currency + ".", 13, MUTED, false);
         addField(form, "Trip Name", nameInput);
-        addField(form, "Route", routeInput);
+        addSpinnerField(form, "Country", countrySpinner);
+        addSpinnerField(form, "State or region", regionSpinner);
+        addSpinnerField(form, "City", citySpinner);
+        form.addView(currencyNote, margins(0, 0, 0, 12));
         addField(form, "Start Date", startInput);
+        addField(form, "End Date", endInput);
         addField(form, "Travelers Count", travelersInput);
 
-        new AlertDialog.Builder(this)
-                .setTitle("Create New Itinerary")
+        final boolean[] firstCountryCallback = {true};
+        final boolean[] firstRegionCallback = {true};
+        countrySpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                LocationData.Country country = LocationData.COUNTRIES.get(position);
+                if (firstCountryCallback[0] && position == initialCountryIndex) {
+                    firstCountryCallback[0] = false;
+                    currencyNote.setText("Expenses will use " + country.currency + ".");
+                    return;
+                }
+                firstCountryCallback[0] = false;
+                List<String> regions = new ArrayList<>();
+                for (LocationData.Region region : country.regions) regions.add(region.name);
+                regionSpinner.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_spinner_dropdown_item, regions));
+                currencyNote.setText("Expenses will use " + country.currency + ".");
+            }
+        });
+        regionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                LocationData.Country country = LocationData.COUNTRIES.get(countrySpinner.getSelectedItemPosition());
+                if (country.regions.isEmpty()) return;
+                LocationData.Region region = country.regions.get(Math.min(position, country.regions.size() - 1));
+                if (firstRegionCallback[0] && country == initialCountry && position == initialRegionIndex) {
+                    firstRegionCallback[0] = false;
+                    return;
+                }
+                firstRegionCallback[0] = false;
+                citySpinner.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_spinner_dropdown_item, region.cities));
+            }
+        });
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(existing == null ? "Create a trip" : "Edit trip details")
                 .setView(scrollable(form))
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Create", (dialog, which) -> {
-                    String name = fallback(nameInput, "New Adventure");
-                    String route = fallback(routeInput, "Custom Route");
-                    String start = fallback(startInput, "2026-08-01");
+                .setPositiveButton(existing == null ? "Create" : "Save", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    String name = nameInput.getText().toString().trim();
+                    String start = startInput.getText().toString().trim();
+                    String end = endInput.getText().toString().trim();
+                    if (name.isEmpty()) { toast("Enter a trip name."); return; }
+                    if (!isValidIsoDate(start) || !isValidIsoDate(end)) { toast("Use YYYY-MM-DD for both dates."); return; }
+                    if (end.compareTo(start) < 0) { toast("End date must be on or after the start date."); return; }
                     int count = Math.max(1, parseInt(travelersInput.getText().toString(), 1));
-
-                    String tripId = "trip-" + System.currentTimeMillis();
-                    List<Day> initialDays = new ArrayList<>();
-                    initialDays.add(new Day("day-" + System.currentTimeMillis(), "01", "DAY 1", "Arrival", new ArrayList<>()));
-
-                    Trip newTrip = new Trip(tripId, name, route, start, count, initialDays);
-                    Traveler organizer = new Traveler();
-                    organizer.name = user.getDisplayName() != null ? user.getDisplayName() : safeEmail(user).split("@")[0];
-                    organizer.email = safeEmail(user);
-                    organizer.role = "Trip organizer";
-                    organizer.avatar = Traveler.initials(organizer.name);
-                    organizer.bg = "avatar-me";
-                    newTrip.travelersList.add(organizer);
-                    for (int i = 1; i < count; i++) {
-                        Traveler traveler = new Traveler();
-                        traveler.name = "Traveler " + (i + 1);
-                        traveler.email = "traveler" + (i + 1) + "@example.com";
-                        traveler.role = "Traveler";
-                        traveler.avatar = "T" + (i + 1);
-                        traveler.bg = "blue";
-                        newTrip.travelersList.add(traveler);
+                    LocationData.Country country = LocationData.COUNTRIES.get(countrySpinner.getSelectedItemPosition());
+                    LocationData.Region region = country.regions.get(regionSpinner.getSelectedItemPosition());
+                    String city = region.cities.get(citySpinner.getSelectedItemPosition());
+                    Trip trip = existing;
+                    if (trip == null) {
+                        String tripId = "trip-" + System.currentTimeMillis();
+                        List<Day> initialDays = new ArrayList<>();
+                        initialDays.add(dayForDate("day-" + System.currentTimeMillis(), start, "Arrival"));
+                        trip = new Trip(tripId, name, city + ", " + region.name + ", " + country.name, start, count, initialDays);
+                        Traveler organizer = new Traveler();
+                        organizer.name = user.getDisplayName() != null ? user.getDisplayName() : safeEmail(user).split("@")[0];
+                        organizer.email = safeEmail(user);
+                        organizer.role = "Trip organizer";
+                        organizer.avatar = Traveler.initials(organizer.name);
+                        organizer.bg = "avatar-me";
+                        trip.travelersList.add(organizer);
+                        MapPin firstPin = new MapPin();
+                        firstPin.name = city;
+                        firstPin.code = city.substring(0, Math.min(3, city.length())).toUpperCase(Locale.US);
+                        firstPin.desc = "Starting point";
+                        firstPin.temp = "Live weather";
+                        trip.mapPins.add(firstPin);
+                        savedTrips.add(0, trip);
                     }
-                    MapPin firstPin = new MapPin();
-                    String firstStop = route.split("→|->|,")[0].trim();
-                    firstPin.name = firstStop.isEmpty() ? name : firstStop;
-                    firstPin.code = firstPin.name.substring(0, Math.min(3, firstPin.name.length())).toUpperCase();
-                    firstPin.desc = "Starting point";
-                    firstPin.temp = "TBD";
-                    newTrip.mapPins.add(firstPin);
-                    savedTrips.add(0, newTrip);
-                    activeTripId = tripId;
+                    trip.name = name;
+                    trip.startDate = start;
+                    trip.endDate = end;
+                    trip.travelersCount = count;
+                    trip.countryCode = country.code;
+                    trip.country = country.name;
+                    trip.regionCode = region.code;
+                    trip.region = region.name;
+                    trip.city = city;
+                    trip.currency = country.currency;
+                    trip.route = city + ", " + region.name + ", " + country.name;
+                    activeTripId = trip.id;
                     activeDayIndex = 0;
                     activeSection = SECTION_OVERVIEW;
+                    showingTripLibrary = false;
+                    weatherByTrip.remove(trip.id);
                     commit(user);
-                    toast("Created new itinerary: \"" + name + "\"!");
-                })
-                .show();
+                    toast(existing == null ? "Trip created." : "Trip details updated.");
+                    dialog.dismiss();
+                }));
+        dialog.show();
     }
 
     private void confirmDeleteTrip(FirebaseUser user, Trip trip) {
         if (trip == null) return;
-        if (savedTrips.size() <= 1) {
-            toast("You must keep at least one itinerary!");
-            return;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("Delete Itinerary")
-                .setMessage("Are you sure you want to permanently delete \"" + trip.name + "\"?")
+        LinearLayout form = formContainer();
+        form.addView(text("This permanently removes the trip and its itinerary from your Firebase profile. Type DELETE to confirm.", 14, MUTED, false), margins(0, 0, 0, 10));
+        EditText confirmation = input("DELETE", InputType.TYPE_CLASS_TEXT, "");
+        form.addView(confirmation);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Delete trip permanently?")
+                .setView(form)
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Delete", (dialog, which) -> {
+                .setPositiveButton("Delete permanently", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    if (!"DELETE".equals(confirmation.getText().toString().trim())) {
+                        toast("Type DELETE to confirm permanent deletion.");
+                        return;
+                    }
                     savedTrips.remove(trip);
-                    activeTripId = savedTrips.get(0).id;
+                    weatherByTrip.remove(trip.id);
+                    activeTripId = firstActiveTripId();
                     activeDayIndex = 0;
+                    showingTripLibrary = true;
                     commit(user);
-                    toast("Itinerary deleted.");
-                })
-                .show();
+                    toast("Trip permanently deleted.");
+                    dialog.dismiss();
+                }));
+        dialog.show();
     }
 
     // ------------------------------------------------------------------ days
@@ -2092,55 +2403,59 @@ public class MainActivity extends android.app.Activity {
 
         int nextNum = (trip.days != null ? trip.days.size() + 1 : 1);
         EditText labelInput = input("Day Title (e.g. Exploring Old Town)", InputType.TYPE_CLASS_TEXT, "Day " + nextNum + " Excursion");
-        EditText dateInput = input("Day of Month (e.g. 14)", InputType.TYPE_CLASS_TEXT, String.valueOf(10 + nextNum));
-        EditText shortInput = input("Weekday Short (e.g. MON)", InputType.TYPE_CLASS_TEXT, "DAY");
+        EditText dateInput = input("YYYY-MM-DD", InputType.TYPE_CLASS_DATETIME, nextTripDayIso(trip));
 
         addField(form, "Day Title", labelInput);
-        addField(form, "Day of Month", dateInput);
-        addField(form, "Weekday Short (3 chars)", shortInput);
+        addField(form, "Calendar Date", dateInput);
 
-        new AlertDialog.Builder(this)
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Add Itinerary Day")
                 .setView(scrollable(form))
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Add Day", (dialog, which) -> {
+                .setPositiveButton("Add Day", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
                     String label = fallback(labelInput, "Day " + nextNum);
-                    String date = fallback(dateInput, String.valueOf(10 + nextNum));
-                    String shortName = fallback(shortInput, "DAY").toUpperCase();
+                    String isoDate = dateInput.getText().toString().trim();
+                    if (!isValidIsoDate(isoDate)) { toast("Use a full date in YYYY-MM-DD format."); return; }
 
                     if (trip.days == null) trip.days = new ArrayList<>();
-                    Day newDay = new Day("day-" + System.currentTimeMillis(), date, shortName, label, new ArrayList<>());
+                    Day newDay = dayForDate("day-" + System.currentTimeMillis(), isoDate, label);
                     trip.days.add(newDay);
                     activeDayIndex = trip.days.size() - 1;
                     activeSection = SECTION_ITINERARY;
                     commit(user);
-                    toast("Added " + label + "!");
-                })
-                .show();
+                    toast("Added " + label + ".");
+                    dialog.dismiss();
+                }));
+        dialog.show();
     }
 
     private void showRenameDayDialog(FirebaseUser user, Trip trip, Day day) {
         if (trip == null || day == null) return;
         LinearLayout form = formContainer();
         EditText labelInput = input("Day Title", InputType.TYPE_CLASS_TEXT, day.label);
-        EditText dateInput = input("Day of Month", InputType.TYPE_CLASS_TEXT, day.date);
-        EditText shortInput = input("Weekday Short", InputType.TYPE_CLASS_TEXT, day.shortName);
+        EditText dateInput = input("YYYY-MM-DD", InputType.TYPE_CLASS_DATETIME,
+                safeText(day.isoDate, dateFromTripAndIndex(trip, activeDayIndex)));
         addField(form, "Day Title", labelInput);
-        addField(form, "Day of Month", dateInput);
-        addField(form, "Weekday Short", shortInput);
+        addField(form, "Calendar Date", dateInput);
 
-        new AlertDialog.Builder(this)
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Edit Day " + (activeDayIndex + 1))
                 .setView(scrollable(form))
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Save", (d, which) -> {
+                .setPositiveButton("Save", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    String isoDate = dateInput.getText().toString().trim();
+                    if (!isValidIsoDate(isoDate)) { toast("Use a full date in YYYY-MM-DD format."); return; }
                     day.label = fallback(labelInput, day.label);
-                    day.date = fallback(dateInput, day.date);
-                    day.shortName = fallback(shortInput, day.shortName).toUpperCase();
+                    applyDate(day, isoDate);
                     commit(user);
-                    toast("Day updated!");
-                })
-                .show();
+                    toast("Day updated.");
+                    dialog.dismiss();
+                }));
+        dialog.show();
     }
 
     private void confirmDeleteDay(FirebaseUser user, Trip trip) {
@@ -2287,89 +2602,15 @@ public class MainActivity extends android.app.Activity {
                 .show();
     }
 
-    private Trip createDefaultTrip() {
-        FlightInfo arrivalFlight = new FlightInfo();
-        arrivalFlight.number = "LX 017";
-        arrivalFlight.airline = "SWISS";
-        arrivalFlight.origin = "JFK";
-        arrivalFlight.destination = "ZRH";
-        arrivalFlight.departureDate = "2026-09-12";
-        arrivalFlight.departureTerminal = "1";
-        arrivalFlight.arrivalTerminal = "2";
-        arrivalFlight.gate = "E52";
-        arrivalFlight.arrivalGate = "TBD";
-        arrivalFlight.scheduledDeparture = "8:40 PM";
-        arrivalFlight.estimatedDeparture = "8:40 PM";
-        arrivalFlight.scheduledArrival = "10:15 AM (+1)";
-        arrivalFlight.estimatedArrival = "10:15 AM (+1)";
-        arrivalFlight.baggageClaim = "Carousel 24";
-        arrivalFlight.lastUpdated = "Just now";
-
-        DayEvent arrival = new DayEvent("ev-1", "8:40 AM", "Arrive at Zürich Airport",
-                "LX 017 · Terminal 2 · Gate E52", "flight", "On time");
-        arrival.flight = arrivalFlight;
-
-        List<DayEvent> events = new ArrayList<>(Arrays.asList(
-                arrival,
-                new DayEvent("ev-2", "10:18 AM", "Train to Zürich HB", "SBB · Platform 3 · 12 min", "train", ""),
-                new DayEvent("ev-3", "7:30 PM", "Dinner at Kronenhalle", "Rämistrasse 4 · Table for 4", "food", "")
-        ));
-        List<Day> days = new ArrayList<>();
-        days.add(new Day("day-1", "12", "SAT", "Arrival in Zürich", events));
-        // Matches the website's starter itinerary so both clients agree on the
-        // trip a fresh account opens with.
-        Trip trip = new Trip("swiss-escape", "Swiss Escape", "Zürich → Interlaken → Zermatt", "2026-09-12", 4, days);
-
-        String[][] travelerData = {
-                {"Manav S.", "Trip organizer", "manav@example.com", "MS", "avatar-me"},
-                {"Amelia L.", "Co-organizer", "amelia@example.com", "AL", "peach"},
-                {"Noah K.", "Traveler", "noah@example.com", "NK", "blue"},
-                {"Riya P.", "Traveler", "riya@example.com", "RP", "green"}
-        };
-        for (String[] row : travelerData) {
-            Traveler traveler = new Traveler();
-            traveler.name = row[0]; traveler.role = row[1]; traveler.email = row[2]; traveler.avatar = row[3]; traveler.bg = row[4];
-            trip.travelersList.add(traveler);
-        }
-
-        String[][] pinData = {
-                {"Zürich", "ZRH", "Arrival & Old Town", "18°C"},
-                {"Interlaken", "INT", "Alpine Lakes & Funicular", "16°C"},
-                {"Lauterbrunnen", "LTB", "Waterfalls & Valley Trail", "15°C"},
-                {"Zermatt", "ZMT", "Matterhorn Peak", "12°C"}
-        };
-        for (String[] row : pinData) {
-            MapPin pin = new MapPin();
-            pin.name = row[0]; pin.code = row[1]; pin.desc = row[2]; pin.temp = row[3];
-            trip.mapPins.add(pin);
-        }
-
-        String[][] walletData = {
-                {"Boarding pass", "SWISS LX 017 · PDF", "LX-98421-ZRH", "LX"},
-                {"Hotel confirmation", "Marktgasse · PDF", "HTL-ZH-4821", "M"},
-                {"Swiss Travel Pass", "8 Consecutive Days", "STP-2026-884", "STP"}
-        };
-        for (String[] row : walletData) {
-            WalletDoc doc = new WalletDoc();
-            doc.id = "wallet-" + trip.walletDocs.size(); doc.title = row[0]; doc.meta = row[1]; doc.code = row[2]; doc.icon = row[3];
-            trip.walletDocs.add(doc);
-        }
-
-        Expense dinner = new Expense();
-        dinner.id = "exp-1"; dinner.description = "Dinner at Kronenhalle"; dinner.amount = 186.00;
-        dinner.currency = "CHF"; dinner.paidBy = "Manav"; dinner.date = "Sep 12"; dinner.category = "Dining";
-        trip.expenses.add(dinner);
-        Expense trainPasses = new Expense();
-        trainPasses.id = "exp-2"; trainPasses.description = "Zürich HB Train Passes"; trainPasses.amount = 42.40;
-        trainPasses.currency = "CHF"; trainPasses.paidBy = "Amelia"; trainPasses.date = "Sep 12"; trainPasses.category = "Transport";
-        trip.expenses.add(trainPasses);
-        return trip;
-    }
-
     // ------------------------------------------------------------- ui helpers
 
     private void showUtilityMenu(FirebaseUser user, Trip trip) {
+        boolean completed = trip != null && trip.isCompleted(System.currentTimeMillis());
+        String archiveAction = completed ? "COMPLETED (AUTO ARCHIVED)" : trip != null && trip.isManuallyArchived() ? "RESTORE TRIP" : "ARCHIVE TRIP";
         String[] actions = {
+                "ALL TRIPS",
+                "EDIT TRIP DETAILS",
+                archiveAction,
                 "FLIGHT TRACKER",
                 "GUEST FLIGHT WATCH",
                 "TRAVELERS",
@@ -2382,26 +2623,35 @@ public class MainActivity extends android.app.Activity {
                 .setTitle("JOURNEYSYNC")
                 .setItems(actions, (dialog, which) -> {
                     if (which == 0) {
+                        showingTripLibrary = true;
+                        renderTripLibrary(user);
+                    } else if (which == 1) {
+                        showTripDetailsDialog(user, trip);
+                    } else if (which == 2) {
+                        if (completed) {
+                            toast("This trip was archived automatically after its final day.");
+                        } else {
+                            trip.archivedAt = trip.isManuallyArchived() ? "" : utcTimestamp(System.currentTimeMillis());
+                            showingTripLibrary = true;
+                            commit(user);
+                        }
+                    } else if (which == 3) {
                         activeSection = SECTION_FLIGHTS;
                         renderDashboard(user);
-                    } else if (which == 1) {
+                    } else if (which == 4) {
                         activeSection = SECTION_GUEST_FLIGHTS;
                         renderDashboard(user);
-                    } else if (which == 2) {
+                    } else if (which == 5) {
                         activeSection = SECTION_TRAVELERS;
                         renderDashboard(user);
-                    } else if (which == 3) {
+                    } else if (which == 6) {
                         showTripSwitcherDialog(user);
-                    } else if (which == 4) {
+                    } else if (which == 7) {
                         showCreateTripDialog(user);
-                    } else if (which == 5) {
+                    } else if (which == 8) {
                         confirmDeleteTrip(user, trip);
                     } else {
-                        firebaseAuth.signOut();
-                        googleClient.signOut();
-                        activeSection = SECTION_OVERVIEW;
-                        activeDayIndex = 0;
-                        showLogin();
+                        signOut();
                     }
                 })
                 .show();
@@ -2499,6 +2749,12 @@ public class MainActivity extends android.app.Activity {
         form.addView(field, margins(0, 0, 0, 10));
     }
 
+    private void addSpinnerField(LinearLayout form, String label, Spinner spinner) {
+        form.addView(text(label, 13, MUTED, true), margins(0, 0, 0, 4));
+        spinner.setMinimumHeight(dp(50));
+        form.addView(spinner, margins(0, 0, 0, 10));
+    }
+
     private LinearLayout fieldGroup(String label, EditText field) {
         LinearLayout group = new LinearLayout(this);
         group.setOrientation(LinearLayout.VERTICAL);
@@ -2569,7 +2825,7 @@ public class MainActivity extends android.app.Activity {
         button.setLetterSpacing(.06f);
         button.setMinHeight(dp(48));
         GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.parseColor(BLUE));
+        background.setColor(Color.parseColor(CORAL));
         background.setCornerRadius(0);
         button.setBackground(background);
         button.setPadding(dp(14), dp(10), dp(14), dp(10));
@@ -2645,6 +2901,109 @@ public class MainActivity extends android.app.Activity {
 
     // ---------------------------------------------------------- value helpers
 
+    private void signOut() {
+        firebaseAuth.signOut();
+        googleClient.signOut();
+        activeSection = SECTION_OVERVIEW;
+        activeDayIndex = 0;
+        showingTripLibrary = true;
+        showLogin();
+    }
+
+    private String firstActiveTripId() {
+        long now = System.currentTimeMillis();
+        for (Trip trip : savedTrips) if (trip != null && !trip.isArchived(now)) return safeText(trip.id, "");
+        return savedTrips.isEmpty() ? "" : safeText(savedTrips.get(0).id, "");
+    }
+
+    private static String locationLabel(Trip trip) {
+        if (trip == null) return "Location not set";
+        String city = safeText(trip.city, "");
+        String region = safeText(trip.region, "");
+        String country = safeText(trip.country, "");
+        List<String> parts = new ArrayList<>();
+        if (!city.isEmpty()) parts.add(city);
+        if (!region.isEmpty()) parts.add(region);
+        if (!country.isEmpty()) parts.add(country);
+        return parts.isEmpty() ? "Location not set" : android.text.TextUtils.join(", ", parts);
+    }
+
+    private static String tripDateRange(Trip trip) {
+        if (trip == null) return "Dates not set";
+        String start = safeText(trip.startDate, "Date not set");
+        String end = safeText(trip.endDate, "");
+        return end.isEmpty() ? start : start + " to " + end;
+    }
+
+    private static String todayIso() {
+        return isoFormat().format(new Date());
+    }
+
+    private static SimpleDateFormat isoFormat() {
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+        format.setLenient(false);
+        return format;
+    }
+
+    private static Date parseCalendarDate(String value) {
+        if (value == null || !value.matches("\\d{4}-\\d{2}-\\d{2}")) return null;
+        try { return isoFormat().parse(value); }
+        catch (Exception ignored) { return null; }
+    }
+
+    private static boolean isValidIsoDate(String value) {
+        return parseCalendarDate(value) != null;
+    }
+
+    private static Day dayForDate(String id, String isoDate, String label) {
+        Day day = new Day(id, "01", "DAY", label, isoDate, new ArrayList<>());
+        applyDate(day, isoDate);
+        return day;
+    }
+
+    private static void applyDate(Day day, String isoDate) {
+        Date parsed = parseCalendarDate(isoDate);
+        if (day == null || parsed == null) return;
+        day.isoDate = isoDate;
+        day.date = new SimpleDateFormat("dd", Locale.US).format(parsed);
+        day.shortName = new SimpleDateFormat("EEE", Locale.US).format(parsed).toUpperCase(Locale.US);
+    }
+
+    private static String dateFromTripAndIndex(Trip trip, int index) {
+        Date start = trip == null ? null : parseCalendarDate(trip.startDate);
+        if (start == null) start = new Date();
+        Calendar calendar = Calendar.getInstance();
+        calendar.setTime(start);
+        calendar.add(Calendar.DAY_OF_MONTH, Math.max(0, index));
+        return isoFormat().format(calendar.getTime());
+    }
+
+    private static String nextTripDayIso(Trip trip) {
+        Date latest = trip == null ? null : parseCalendarDate(trip.startDate);
+        if (trip != null && trip.days != null) {
+            for (Day day : trip.days) {
+                Date candidate = day == null ? null : parseCalendarDate(day.isoDate);
+                if (candidate != null && (latest == null || candidate.after(latest))) latest = candidate;
+            }
+        }
+        if (latest == null) latest = new Date();
+        Calendar calendar = Calendar.getInstance();
+        calendar.setTime(latest);
+        calendar.add(Calendar.DAY_OF_MONTH, 1);
+        return isoFormat().format(calendar.getTime());
+    }
+
+    private static final class WeatherSnapshot {
+        String destination;
+        String day;
+        String high;
+        String low;
+        String rain;
+        String icon;
+        String description;
+        String error;
+    }
+
     /** Mirrors the website's formatTime so 24h entry renders as 8:40 PM. */
     static String formatTime(String raw) {
         return TimeFormat.display(raw);
@@ -2691,12 +3050,7 @@ public class MainActivity extends android.app.Activity {
     }
 
     private static String expenseCurrency(Trip trip) {
-        if (trip != null && trip.expenses != null) {
-            for (Expense expense : trip.expenses) {
-                if (expense != null && expense.currency != null && !expense.currency.trim().isEmpty()) return expense.currency;
-            }
-        }
-        return "USD";
+        return trip == null ? "USD" : safeText(trip.currency, "USD").toUpperCase(Locale.US);
     }
 
     private static int indexOfIgnoreCase(String[] values, String needle) {

@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated Cloudflare runtime declarations. The upstream interfaces use
+    // `any`, so linting this shim creates noise without checking app code.
+    "cloudflare.d.ts",
     // Vendored design reference, not our source. It is gitignored, so linting
     // it only ever failed the gate on code we do not maintain.
     "work/**",

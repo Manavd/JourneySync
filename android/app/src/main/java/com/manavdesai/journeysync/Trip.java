@@ -4,18 +4,33 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.Locale;
 
 /**
  * One saved itinerary shared by the native Android and web clients.
  */
 public class Trip {
-    private static final String[] KNOWN_KEYS = {"id", "name", "route", "startDate", "travelersCount", "days",
+    private static final String[] KNOWN_KEYS = {"id", "name", "route", "startDate", "endDate", "travelersCount",
+            "countryCode", "country", "regionCode", "region", "city", "currency", "archivedAt", "days",
             "expenses", "walletDocs", "mapPins", "travelersList", "guestFlights"};
 
     public String id;
     public String name;
     public String route;
     public String startDate;
+    public String endDate;
+    public String countryCode;
+    public String country;
+    public String regionCode;
+    public String region;
+    public String city;
+    public String currency;
+    /** Non-empty only when the traveler manually archives this trip. */
+    public String archivedAt;
     public int travelersCount;
     public List<Day> days;
     public List<Expense> expenses;
@@ -51,6 +66,14 @@ public class Trip {
         trip.name = MapValues.str(map.get("name"), "Untitled trip");
         trip.route = MapValues.str(map.get("route"), "Route to be planned");
         trip.startDate = MapValues.str(map.get("startDate"), "");
+        trip.endDate = MapValues.str(map.get("endDate"), "");
+        trip.countryCode = MapValues.str(map.get("countryCode"), "");
+        trip.country = MapValues.str(map.get("country"), "");
+        trip.regionCode = MapValues.str(map.get("regionCode"), "");
+        trip.region = MapValues.str(map.get("region"), "");
+        trip.city = MapValues.str(map.get("city"), "");
+        trip.currency = MapValues.str(map.get("currency"), LocationData.country(trip.countryCode).currency);
+        trip.archivedAt = MapValues.str(map.get("archivedAt"), "");
         trip.travelersCount = MapValues.integer(map.get("travelersCount"), 1);
         trip.days = new ArrayList<>();
         Object rawDays = map.get("days");
@@ -77,6 +100,15 @@ public class Trip {
         map.put("name", name != null ? name : "Untitled trip");
         map.put("route", route != null ? route : "Route to be planned");
         map.put("startDate", startDate != null ? startDate : "");
+        map.put("endDate", endDate != null ? endDate : "");
+        map.put("countryCode", countryCode != null ? countryCode : "");
+        map.put("country", country != null ? country : "");
+        map.put("regionCode", regionCode != null ? regionCode : "");
+        map.put("region", region != null ? region : "");
+        map.put("city", city != null ? city : "");
+        map.put("currency", currency != null ? currency : "USD");
+        if (archivedAt != null && !archivedAt.trim().isEmpty()) map.put("archivedAt", archivedAt);
+        else map.remove("archivedAt");
         map.put("travelersCount", travelersCount);
         List<Map<String, Object>> dayList = new ArrayList<>();
         if (days != null) {
@@ -128,6 +160,43 @@ public class Trip {
         double total = 0;
         if (expenses != null) for (Expense expense : expenses) if (expense != null && !expense.settled) total += expense.amount;
         return total;
+    }
+
+    public boolean isManuallyArchived() {
+        return archivedAt != null && !archivedAt.trim().isEmpty();
+    }
+
+    /** A trip completes at local midnight after its latest saved itinerary date. */
+    public boolean isCompleted(long nowMillis) {
+        Date effectiveEnd = parseIsoDate(endDate);
+        Date start = parseIsoDate(startDate);
+        if (effectiveEnd == null || (start != null && start.after(effectiveEnd))) effectiveEnd = start;
+        if (days != null) {
+            for (Day day : days) {
+                Date candidate = day == null ? null : parseIsoDate(day.isoDate);
+                if (candidate != null && (effectiveEnd == null || candidate.after(effectiveEnd))) effectiveEnd = candidate;
+            }
+        }
+        if (effectiveEnd == null) return false;
+        Calendar archiveAt = Calendar.getInstance();
+        archiveAt.setTime(effectiveEnd);
+        archiveAt.add(Calendar.DAY_OF_MONTH, 1);
+        return nowMillis >= archiveAt.getTimeInMillis();
+    }
+
+    public boolean isArchived(long nowMillis) {
+        return isManuallyArchived() || isCompleted(nowMillis);
+    }
+
+    private static Date parseIsoDate(String value) {
+        if (value == null || !value.matches("\\d{4}-\\d{2}-\\d{2}")) return null;
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+        format.setLenient(false);
+        try {
+            return format.parse(value);
+        } catch (ParseException ignored) {
+            return null;
+        }
     }
 
     /** Every flight event in this trip, paired with the day it belongs to. */

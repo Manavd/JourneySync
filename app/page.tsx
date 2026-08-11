@@ -16,6 +16,14 @@ import {
   getIdToken,
   User 
 } from "./firebase";
+import {
+  COMMON_CURRENCIES,
+  TRIP_COUNTRIES,
+  countryByCode,
+  currencyForCountry,
+  inferCountryCode,
+  regionByCode,
+} from "./location-data";
 
 type FlightInfo = {
   number: string;
@@ -68,6 +76,7 @@ type LiveFlightSearchResponse = Partial<LiveFlightUpdate> & {
 
 type Day = {
   id?: string;
+  isoDate?: string;
   date: string;
   short: string;
   label: string;
@@ -115,6 +124,7 @@ type Trip = {
   name: string;
   route: string;
   startDate: string;
+  endDate?: string;
   travelersCount: number;
   days: Day[];
   expenses: Expense[];
@@ -122,12 +132,45 @@ type Trip = {
   mapPins: MapPin[];
   travelersList: Traveler[];
   guestFlights?: GuestFlight[];
+  countryCode?: string;
+  country?: string;
+  regionCode?: string;
+  region?: string;
+  city?: string;
+  currency?: string;
+  archivedAt?: string;
+};
+
+type WeatherDay = {
+  day: string;
+  temp: string;
+  high: string;
+  low: string;
+  desc: string;
+  rain: string;
+  icon: string;
+};
+
+type WeatherForecast = {
+  destination: string;
+  region: string;
+  country: string;
+  days: WeatherDay[];
+  source?: string;
 };
 
 type TripCache = {
   savedTrips: Trip[];
   activeTripId: string;
+  updatedAt: number;
 };
+
+const EMPTY_DAYS: Day[] = [];
+const EMPTY_EXPENSES: Expense[] = [];
+const EMPTY_WALLET_DOCS: WalletDoc[] = [];
+const EMPTY_MAP_PINS: MapPin[] = [];
+const EMPTY_TRAVELERS: Traveler[] = [];
+const EMPTY_GUEST_FLIGHTS: GuestFlight[] = [];
 
 function localTripsKey(uid: string) {
   return `journeysync_trips_${uid}`;
@@ -143,6 +186,7 @@ function readLocalTrips(uid: string): TripCache | null {
       return {
         savedTrips: parsed.savedTrips,
         activeTripId: typeof parsed.activeTripId === "string" ? parsed.activeTripId : "",
+        updatedAt: timestampMillis(parsed.updatedAt),
       };
     }
   } catch { /* ignore corrupt cache */ }
@@ -156,24 +200,30 @@ function writeLocalTrips(uid: string, cache: TripCache) {
   } catch { /* ignore quota errors */ }
 }
 
-function clearLocalTrips(uid: string) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.removeItem(localTripsKey(uid));
-  } catch { /* ignore */ }
+function timestampMillis(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 0;
 }
 
-function normalizeTripCache(savedTrips: Trip[], activeTripId: string): TripCache {
+function normalizeTripCache(savedTrips: Trip[], activeTripId: string, updatedAt = 0): TripCache {
   const validActive = savedTrips.some((trip) => trip.id === activeTripId)
     ? activeTripId
     : (savedTrips[0]?.id ?? "");
-  return { savedTrips, activeTripId: validActive };
+  return { savedTrips, activeTripId: validActive, updatedAt };
 }
 
 function tripsFromCloud(data: Record<string, unknown> | undefined): TripCache {
   const savedTrips = data && Array.isArray(data.savedTrips) ? (data.savedTrips as Trip[]) : [];
   const activeTripId = data && typeof data.activeTripId === "string" ? data.activeTripId : "";
-  return normalizeTripCache(savedTrips, activeTripId);
+  return normalizeTripCache(savedTrips, activeTripId, timestampMillis(data?.updatedAt));
+}
+
+function tripCachePayload(cache: TripCache): string {
+  return JSON.stringify({ savedTrips: cache.savedTrips, activeTripId: cache.activeTripId });
 }
 
 const iconFor = {
@@ -197,6 +247,48 @@ function formatTime(raw: string): string {
   if (h === 0) h = 12;
   else if (h > 12) h -= 12;
   return `${h}:${m} ${ampm}`;
+}
+
+function formatTripStartDate(startDate: string): string {
+  if (!startDate) return "Dates not set";
+  const date = new Date(`${startDate}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return "Dates not set";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function tripEndDate(trip: Trip): Date | null {
+  if (!trip.startDate) return null;
+  const start = new Date(`${trip.startDate}T12:00:00`);
+  if (Number.isNaN(start.getTime())) return null;
+  const savedEnd = trip.endDate ? new Date(`${trip.endDate}T12:00:00`) : null;
+  const configuredEnd = savedEnd && !Number.isNaN(savedEnd.getTime()) ? savedEnd : start;
+  const dayDates = trip.days.map((day, index) => {
+    if (day.isoDate) {
+      const savedDate = new Date(`${day.isoDate}T12:00:00`);
+      if (!Number.isNaN(savedDate.getTime())) return savedDate;
+    }
+    const fallback = new Date(start);
+    fallback.setDate(fallback.getDate() + index);
+    return fallback;
+  });
+  return dayDates.reduce((latest, date) => date.getTime() > latest.getTime() ? date : latest, configuredEnd);
+}
+
+function isTripCompleted(trip: Trip, now = new Date()): boolean {
+  const end = tripEndDate(trip);
+  if (!end) return false;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return end.getTime() < today.getTime();
+}
+
+function activeTripStatus(trip: Trip): "Active" | "Upcoming" {
+  if (!trip.startDate) return "Active";
+  const start = new Date(`${trip.startDate}T12:00:00`);
+  return !Number.isNaN(start.getTime()) && start.getTime() > Date.now() ? "Upcoming" : "Active";
 }
 
 function friendlyAuthError(error: unknown): string {
@@ -245,6 +337,180 @@ function friendlyFlightError(error: unknown): string {
   return "Live flight data could not be refreshed. Try again shortly.";
 }
 
+function locationFromForm(form: FormData) {
+  const countryCode = String(form.get("countryCode") || "US");
+  const selectedCountry = countryByCode(countryCode);
+  const country = countryCode === "OTHER"
+    ? String(form.get("customCountry") || "Other country").trim()
+    : selectedCountry?.name || "United States";
+  const regionCode = String(form.get("regionCode") || "");
+  const selectedRegion = regionByCode(countryCode, regionCode);
+  const region = regionCode === "OTHER"
+    ? String(form.get("customRegion") || "").trim()
+    : selectedRegion?.name || "";
+  const cityChoice = String(form.get("city") || "");
+  const city = cityChoice === "OTHER"
+    ? String(form.get("customCity") || "").trim()
+    : cityChoice.trim();
+  const currency = countryCode === "OTHER"
+    ? String(form.get("currency") || "USD")
+    : currencyForCountry(countryCode);
+
+  return { countryCode, country, regionCode, region, city, currency };
+}
+
+function TripLocationFields({
+  defaultCountryCode = "US",
+  defaultCountry = "",
+  defaultRegionCode = "",
+  defaultRegion = "",
+  defaultCity = "",
+  defaultCurrency = "USD",
+}: {
+  defaultCountryCode?: string;
+  defaultCountry?: string;
+  defaultRegionCode?: string;
+  defaultRegion?: string;
+  defaultCity?: string;
+  defaultCurrency?: string;
+}) {
+  const knownCountry = countryByCode(defaultCountryCode);
+  const initialCountryCode = knownCountry ? defaultCountryCode : defaultCountry ? "OTHER" : "US";
+  const [countryCode, setCountryCode] = useState(initialCountryCode);
+  const initialCountry = countryByCode(initialCountryCode);
+  const knownRegion = initialCountry?.regions.some((region) => region.code === defaultRegionCode);
+  const [regionCode, setRegionCode] = useState(knownRegion ? defaultRegionCode : defaultRegion ? "OTHER" : "");
+  const initialRegion = regionByCode(initialCountryCode, knownRegion ? defaultRegionCode : "");
+  const [city, setCity] = useState(defaultCity && initialRegion?.cities.includes(defaultCity) ? defaultCity : defaultCity ? "OTHER" : "");
+  const country = countryByCode(countryCode);
+  const region = regionByCode(countryCode, regionCode);
+  const cityIsCustom = city === "OTHER";
+
+  return (
+    <fieldset className="location-fields">
+      <legend>Trip location</legend>
+      <label>Country
+        <select
+          name="countryCode"
+          value={countryCode}
+          onChange={(event) => {
+            setCountryCode(event.target.value);
+            setRegionCode("");
+            setCity("");
+          }}
+          required
+        >
+          {TRIP_COUNTRIES.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}
+          <option value="OTHER">Other country</option>
+        </select>
+      </label>
+
+      {countryCode === "OTHER" ? (
+        <>
+          <label>Country name<input name="customCountry" defaultValue={defaultCountry} placeholder="Enter country" required /></label>
+          <label>State or region<input name="customRegion" defaultValue={defaultRegion} placeholder="Enter state or region" required /></label>
+          <input type="hidden" name="regionCode" value="OTHER" />
+          <label>City<input name="customCity" defaultValue={defaultCity} placeholder="Enter city" required /></label>
+          <input type="hidden" name="city" value="OTHER" />
+          <label>Trip currency
+            <select name="currency" defaultValue={defaultCurrency}>
+              {COMMON_CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+            </select>
+          </label>
+        </>
+      ) : (
+        <>
+          <label>{country?.regionLabel || "State or region"}
+            <select
+              name="regionCode"
+              value={regionCode}
+              onChange={(event) => {
+                setRegionCode(event.target.value);
+                setCity("");
+              }}
+              required
+            >
+              <option value="">Choose {country?.regionLabel.toLocaleLowerCase() || "state or region"}</option>
+              {country?.regions.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}
+              <option value="OTHER">Other {country?.regionLabel.toLocaleLowerCase() || "state or region"}</option>
+            </select>
+          </label>
+
+          {regionCode === "OTHER" ? (
+            <label>State or region name<input name="customRegion" defaultValue={defaultRegion} placeholder="Enter state or region" required /></label>
+          ) : null}
+
+          <label>City
+            <select name="city" value={regionCode === "OTHER" || cityIsCustom ? "OTHER" : city} onChange={(event) => setCity(event.target.value)} disabled={!regionCode} required>
+              <option value="">{regionCode ? "Choose city" : "Choose a state or region first"}</option>
+              {region?.cities.map((item) => <option key={item} value={item}>{item}</option>)}
+              {regionCode ? <option value="OTHER">Other city</option> : null}
+            </select>
+          </label>
+
+          {cityIsCustom || regionCode === "OTHER" ? (
+            <label>City name<input name="customCity" defaultValue={defaultCity} placeholder="Enter city" required /></label>
+          ) : null}
+
+          <input type="hidden" name="currency" value={country?.currency || "USD"} />
+          <p className="location-currency">Expenses will use <strong>{country?.currency || "USD"}</strong>.</p>
+        </>
+      )}
+    </fieldset>
+  );
+}
+
+function TripDateFields({ defaultStart = "", defaultEnd = "" }: { defaultStart?: string; defaultEnd?: string }) {
+  const [startDate, setStartDate] = useState(defaultStart);
+  const [endDate, setEndDate] = useState(defaultEnd);
+
+  return (
+    <div className="form-row trip-date-fields">
+      <label>Start date
+        <input
+          name="start"
+          type="date"
+          value={startDate}
+          onChange={(event) => {
+            const nextStart = event.target.value;
+            setStartDate(nextStart);
+            if (endDate && endDate < nextStart) setEndDate(nextStart);
+          }}
+          required
+        />
+      </label>
+      <label>End date
+        <input name="end" type="date" min={startDate || undefined} value={endDate} onChange={(event) => setEndDate(event.target.value)} required />
+      </label>
+    </div>
+  );
+}
+
+function DeleteTripDialog({ trip, onCancel, onConfirm }: {
+  trip: Trip;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [confirmation, setConfirmation] = useState("");
+  const confirmed = confirmation.trim().toUpperCase() === "DELETE";
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onCancel}>
+      <section className="modal delete-trip-modal" onMouseDown={(event) => event.stopPropagation()} role="alertdialog" aria-modal="true" aria-labelledby="delete-trip-title">
+        <button className="modal-close" type="button" onClick={onCancel} aria-label="Close permanent delete dialog">×</button>
+        <span className="eyebrow">PERMANENT DELETE</span>
+        <h2 id="delete-trip-title">Delete {trip.name}?</h2>
+        <p className="modal-copy">This removes the itinerary, expenses, flights, travelers, map pins, and wallet items from your Firebase profile. It cannot be restored.</p>
+        <label>Type DELETE to confirm
+          <input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoFocus autoComplete="off" />
+        </label>
+        <button className="danger-action" type="button" disabled={!confirmed} onClick={onConfirm}>Delete trip permanently</button>
+        <button className="secondary-action" type="button" onClick={onCancel}>Keep trip</button>
+      </section>
+    </div>
+  );
+}
+
 export default function Home() {
   // Navigation & User State
   const [activeNav, setActiveNav] = useState("Itinerary");
@@ -259,14 +525,32 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [offlineCachedAt, setOfflineCachedAt] = useState<string | null>(null);
+  const [profileReady, setProfileReady] = useState(false);
 
   const activeUidRef = useRef<string | null>(null);
-  const cloudHydratedRef = useRef(false);
+  const baselineRef = useRef<{ uid: string; payload: string; updatedAt: number } | null>(null);
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncGenerationRef = useRef(0);
 
   // App Data State - Multi-Trip Architecture
   const [savedTrips, setSavedTrips] = useState<Trip[]>([]);
   const [activeTripId, setActiveTripId] = useState("");
-  const [cloudHydrated, setCloudHydrated] = useState(false);
+  const [appView, setAppView] = useState<"trips" | "trip">("trips");
+  const [libraryFilter, setLibraryFilter] = useState<"active" | "archived">("active");
+  const [pendingDeleteTripId, setPendingDeleteTripId] = useState<string | null>(null);
+
+  const activeTrips = useMemo(() => savedTrips
+    .filter((trip) => !trip.archivedAt && !isTripCompleted(trip))
+    .sort((a, b) => (a.startDate || "9999").localeCompare(b.startDate || "9999")), [savedTrips]);
+  const archivedTrips = useMemo(() => savedTrips
+    .filter((trip) => !!trip.archivedAt || isTripCompleted(trip))
+    .sort((a, b) => {
+      const aDate = a.archivedAt || tripEndDate(a)?.toISOString() || "";
+      const bDate = b.archivedAt || tripEndDate(b)?.toISOString() || "";
+      return bDate.localeCompare(aDate);
+    }), [savedTrips]);
+  const visibleTrips = libraryFilter === "active" ? activeTrips : archivedTrips;
+  const pendingDeleteTrip = pendingDeleteTripId ? savedTrips.find((trip) => trip.id === pendingDeleteTripId) || null : null;
 
   const activeTrip = useMemo(() => {
     if (savedTrips.length === 0) return null;
@@ -278,12 +562,21 @@ export default function Home() {
   const tripName = activeTrip?.name ?? "No trip selected";
   const tripRoute = activeTrip?.route ?? "";
   const tripTravelers = activeTrip?.travelersCount ?? 0;
-  const itineraryDays = activeTrip?.days ?? [];
-  const expenses = activeTrip?.expenses ?? [];
-  const walletDocs = activeTrip?.walletDocs ?? [];
-  const mapPins = activeTrip?.mapPins ?? [];
-  const travelersList = activeTrip?.travelersList ?? [];
-  const guestFlights = activeTrip?.guestFlights ?? [];
+  const itineraryDays = activeTrip?.days ?? EMPTY_DAYS;
+  const expenses = activeTrip?.expenses ?? EMPTY_EXPENSES;
+  const walletDocs = activeTrip?.walletDocs ?? EMPTY_WALLET_DOCS;
+  const mapPins = activeTrip?.mapPins ?? EMPTY_MAP_PINS;
+  const travelersList = activeTrip?.travelersList ?? EMPTY_TRAVELERS;
+  const guestFlights = activeTrip?.guestFlights ?? EMPTY_GUEST_FLIGHTS;
+  const inferredCountryCode = useMemo(() => {
+    if (activeTrip?.countryCode) return activeTrip.countryCode;
+    const locationText = [activeTrip?.route, activeTrip?.name, ...(activeTrip?.mapPins ?? []).map((pin) => pin.name)].filter(Boolean).join(" ");
+    return inferCountryCode(locationText) || "US";
+  }, [activeTrip]);
+  const tripCurrency = activeTrip?.currency || currencyForCountry(inferredCountryCode);
+  const tripCity = activeTrip?.city || mapPins[0]?.name || tripRoute.split(/→|->|,/)[0]?.trim() || "";
+  const tripRegion = activeTrip?.region || "";
+  const tripCountry = activeTrip?.country || countryByCode(inferredCountryCode)?.name || "";
 
   const [activeDay, setActiveDay] = useState(0);
 
@@ -303,7 +596,7 @@ export default function Home() {
   const [synced, setSynced] = useState(true);
   const [toast, setToast] = useState("");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [plannerOpen, setPlannerOpen] = useState<"trip" | "day" | "item" | "edit-item" | "edit-day" | "expense" | "pass" | "flight" | "flight-edit" | "track-flight" | "guest-flight" | "weather" | "travelers" | "trip-switcher" | "map-pin" | "settle" | null>(null);
+  const [plannerOpen, setPlannerOpen] = useState<"trip" | "trip-settings" | "day" | "item" | "edit-item" | "edit-day" | "expense" | "pass" | "flight" | "flight-edit" | "track-flight" | "guest-flight" | "weather" | "travelers" | "trip-switcher" | "map-pin" | "settle" | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<DayEvent | null>(null);
   const [selectedGuestFlight, setSelectedGuestFlight] = useState<GuestFlight | null>(null);
   const [liveUpdating, setLiveUpdating] = useState<string | null>(null);
@@ -313,6 +606,10 @@ export default function Home() {
   const [flightSearchError, setFlightSearchError] = useState("");
   const [dayDropdownOpen, setDayDropdownOpen] = useState(false);
   const [selectedMapPin, setSelectedMapPin] = useState<string>("");
+  const [weatherForecast, setWeatherForecast] = useState<WeatherForecast | null>(null);
+  const [weatherLocationKey, setWeatherLocationKey] = useState("");
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState("");
 
   // Auth Listener & Firestore Sync
   useEffect(() => {
@@ -321,90 +618,151 @@ export default function Home() {
       unsubscribeCloud();
       unsubscribeCloud = () => {};
 
-      const previousUid = activeUidRef.current;
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = null;
+      }
+      syncGenerationRef.current += 1;
+
       const nextUid = currentUser?.uid ?? null;
       activeUidRef.current = nextUid;
 
-      cloudHydratedRef.current = false;
-      setCloudHydrated(false);
       setCloudReady(false);
       setSynced(true);
       setOfflineCachedAt(null);
+      setProfileReady(false);
+      baselineRef.current = null;
       setUser(currentUser);
       setAuthChecking(false);
-
-      if (previousUid && previousUid !== nextUid) {
-        clearLocalTrips(previousUid);
-      }
 
       if (!currentUser) {
         setSavedTrips([]);
         setActiveTripId("");
         setActiveDay(0);
+        setAppView("trips");
         return;
       }
 
       setAuthError("");
-      setSavedTrips([]);
-      setActiveTripId("");
+      const uid = currentUser.uid;
+      const cached = readLocalTrips(uid);
+      if (cached) {
+        const normalizedCache = normalizeTripCache(cached.savedTrips, cached.activeTripId, cached.updatedAt);
+        baselineRef.current = { uid, payload: tripCachePayload(normalizedCache), updatedAt: normalizedCache.updatedAt };
+        setSavedTrips(normalizedCache.savedTrips);
+        setActiveTripId(normalizedCache.activeTripId);
+        setOfflineCachedAt(normalizedCache.updatedAt > 0 ? new Date(normalizedCache.updatedAt).toISOString() : null);
+        setProfileReady(true);
+      } else {
+        setSavedTrips([]);
+        setActiveTripId("");
+      }
 
-      const docRef = doc(db, "users", currentUser.uid, "user_trips", "all_trips");
+      const docRef = doc(db, "users", uid, "user_trips", "all_trips");
       unsubscribeCloud = onSnapshot(docRef, (snap) => {
+        if (activeUidRef.current !== uid) return;
         const cloud = tripsFromCloud(snap.exists() ? (snap.data() as Record<string, unknown>) : undefined);
-        setSavedTrips(cloud.savedTrips);
-        setActiveTripId(cloud.activeTripId);
+        const latestLocal = readLocalTrips(uid);
+        const selected = latestLocal && latestLocal.updatedAt > cloud.updatedAt ? latestLocal : cloud;
+        const cloudPayload = tripCachePayload(cloud);
+        const selectedPayload = tripCachePayload(selected);
+
+        // Keep the cloud payload as the comparison baseline. If a newer device
+        // copy won, the sync effect below sees the difference and uploads it.
+        baselineRef.current = { uid, payload: cloudPayload, updatedAt: cloud.updatedAt };
+        setSavedTrips(selected.savedTrips);
+        setActiveTripId(selected.activeTripId);
         setActiveDay(0);
-        writeLocalTrips(currentUser.uid, cloud);
-        cloudHydratedRef.current = true;
-        setCloudHydrated(true);
+        writeLocalTrips(uid, selected);
+        setProfileReady(true);
         setCloudReady(true);
-        setSynced(true);
-        setOfflineCachedAt(null);
+        setSynced(selectedPayload === cloudPayload);
+        setOfflineCachedAt(selected.updatedAt > 0 ? new Date(selected.updatedAt).toISOString() : null);
       }, (error) => {
+        if (activeUidRef.current !== uid) return;
         console.error("Could not load Firestore trip data:", error);
         setSynced(false);
-        setCloudHydrated(false);
-        cloudHydratedRef.current = false;
         setCloudReady(false);
-        notify("Cloud data could not load. Sign in again or check your connection.");
+        const latestLocal = readLocalTrips(uid);
+        if (latestLocal) {
+          baselineRef.current = { uid, payload: tripCachePayload(latestLocal), updatedAt: latestLocal.updatedAt };
+          setSavedTrips(latestLocal.savedTrips);
+          setActiveTripId(latestLocal.activeTripId);
+          setOfflineCachedAt(latestLocal.updatedAt > 0 ? new Date(latestLocal.updatedAt).toISOString() : null);
+        } else {
+          const empty = normalizeTripCache([], "");
+          baselineRef.current = { uid, payload: tripCachePayload(empty), updatedAt: 0 };
+          setSavedTrips([]);
+          setActiveTripId("");
+        }
+        setProfileReady(true);
+        notify("Cloud data could not load. Device changes will stay saved and sync when Firebase reconnects.");
       });
     });
     return () => {
+      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
       unsubscribeCloud();
       unsubscribe();
     };
   }, []);
 
-  // Sync to Firestore and per-user LocalStorage whenever signed-in data changes
+  // Persist signed-in changes to an account-specific device cache immediately,
+  // then debounce the whole-profile Firestore write to avoid stale write races.
   useEffect(() => {
-    if (!user || !cloudHydrated) return;
+    if (!user || !profileReady) return;
 
-    const cache = normalizeTripCache(savedTrips, activeTripId);
+    const normalized = normalizeTripCache(savedTrips, activeTripId);
+    const payload = tripCachePayload(normalized);
+    const baseline = baselineRef.current;
+    if (baseline?.uid === user.uid && baseline.payload === payload) return;
+
+    const cache = { ...normalized, updatedAt: Date.now() };
+    baselineRef.current = { uid: user.uid, payload, updatedAt: cache.updatedAt };
     writeLocalTrips(user.uid, cache);
+    const cachedAt = new Date(cache.updatedAt).toISOString();
 
-    const syncData = async () => {
-      setSynced(false);
-      try {
-        const docRef = doc(db, "users", user.uid, "user_trips", "all_trips");
-        await setDoc(docRef, {
-          savedTrips: cache.savedTrips,
-          activeTripId: cache.activeTripId,
-          updatedAt: new Date().toISOString(),
-        }, { merge: true });
-        setSynced(true);
-      } catch (e) {
-        console.error("Firestore sync error:", e);
-        setSynced(false);
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    const generation = ++syncGenerationRef.current;
+
+    if (!cloudReady) {
+      syncTimerRef.current = setTimeout(() => {
+        if (activeUidRef.current === user.uid && syncGenerationRef.current === generation) {
+          setOfflineCachedAt(cachedAt);
+          setSynced(false);
+        }
+      }, 0);
+    } else {
+      syncTimerRef.current = setTimeout(async () => {
+        if (activeUidRef.current === user.uid && syncGenerationRef.current === generation) {
+          setOfflineCachedAt(cachedAt);
+          setSynced(false);
+        }
+        try {
+          const docRef = doc(db, "users", user.uid, "user_trips", "all_trips");
+          await setDoc(docRef, {
+            savedTrips: cache.savedTrips,
+            activeTripId: cache.activeTripId,
+            updatedAt: cache.updatedAt,
+          }, { merge: true });
+          if (activeUidRef.current === user.uid && syncGenerationRef.current === generation) {
+            setSynced(true);
+          }
+        } catch (e) {
+          console.error("Firestore sync error:", e);
+          if (activeUidRef.current === user.uid && syncGenerationRef.current === generation) {
+            setSynced(false);
+          }
+        }
+      }, 250);
+    }
+
+    return () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = null;
       }
     };
-    void syncData();
-  }, [user, cloudHydrated, savedTrips, activeTripId]);
-
-  useEffect(() => {
-    if (activeDay >= itineraryDays.length && itineraryDays.length > 0) {
-      setActiveDay(0);
-    }
-  }, [activeDay, itineraryDays.length]);
+  }, [user, profileReady, cloudReady, savedTrips, activeTripId]);
 
   const day = useMemo(() => itineraryDays[activeDay] || itineraryDays[0] || { date: "12", short: "SAT", label: "Day 1", events: [] }, [activeDay, itineraryDays]);
 
@@ -431,48 +789,85 @@ export default function Home() {
   // Compute trip date range from itinerary data and start date
   const tripDateRange = useMemo(() => {
     const startObj = new Date(activeTrip?.startDate ? `${activeTrip.startDate}T12:00:00` : Date.now());
-    const monthStr = new Intl.DateTimeFormat("en-US", { month: "long" }).format(startObj).toUpperCase();
-    const yearStr = String(startObj.getFullYear() || 2026);
-    if (itineraryDays.length === 0) return { startDate: "01", endDate: "01", month: monthStr, year: yearStr };
-    const first = itineraryDays[0];
-    const last = itineraryDays[itineraryDays.length - 1];
+    const itineraryDates = itineraryDays.map((tripDay, index) => {
+      if (tripDay.isoDate) {
+        const savedDate = new Date(`${tripDay.isoDate}T12:00:00`);
+        if (!Number.isNaN(savedDate.getTime())) return savedDate;
+      }
+      const fallback = new Date(startObj);
+      fallback.setDate(fallback.getDate() + index);
+      return fallback;
+    });
+    const savedEnd = activeTrip?.endDate ? new Date(`${activeTrip.endDate}T12:00:00`) : null;
+    const validDates = [
+      startObj,
+      ...itineraryDates,
+      ...(savedEnd && !Number.isNaN(savedEnd.getTime()) ? [savedEnd] : []),
+    ].sort((a, b) => a.getTime() - b.getTime());
+    const first = validDates[0] || startObj;
+    const last = validDates[validDates.length - 1] || startObj;
+    const month = (date: Date) => new Intl.DateTimeFormat("en-US", { month: "long" }).format(date).toUpperCase();
     return {
-      startDate: first.date,
-      endDate: last.date,
-      month: monthStr,
-      year: yearStr,
+      startDate: String(first.getDate()).padStart(2, "0"),
+      endDate: String(last.getDate()).padStart(2, "0"),
+      startMonth: month(first),
+      endMonth: month(last),
+      startYear: String(first.getFullYear()),
+      endYear: String(last.getFullYear()),
     };
-  }, [itineraryDays, activeTrip?.startDate]);
+  }, [itineraryDays, activeTrip?.startDate, activeTrip?.endDate]);
 
-  // Compute dynamic weather forecast for the trip
-  const dynamicWeatherForecast = useMemo(() => {
-    const startObj = new Date(activeTrip?.startDate ? `${activeTrip.startDate}T12:00:00` : Date.now());
-    const dest = mapPins[0]?.name || tripName.split(" ")[0] || "Destination";
-    const conditions = [
-      { desc: "Partly Cloudy", icon: "☁", rain: "10%", offsetTemp: 0 },
-      { desc: "Sunny", icon: "☀", rain: "0%", offsetTemp: 3 },
-      { desc: "Light Showers", icon: "🌧", rain: "40%", offsetTemp: -2 },
-      { desc: "Clear Air", icon: "☀", rain: "5%", offsetTemp: -1 },
-      { desc: "Mostly Sunny", icon: "🌤", rain: "15%", offsetTemp: 1 },
-    ];
-    const baseTemp = parseInt(mapPins[0]?.temp || "18", 10) || 18;
+  // Weather is fetched fresh for the trip's saved city instead of being generated
+  // from placeholder temperatures. The API route also sends no-store headers.
+  const requestedWeatherKey = [activeTrip?.id, tripCity, tripRegion, tripCountry, inferredCountryCode].join("|");
+  useEffect(() => {
+    if (!activeTrip?.id || !tripCity) return;
 
-    return {
-      destination: dest,
-      days: conditions.map((c, i) => {
-        const d = new Date(startObj);
-        d.setDate(d.getDate() + i);
-        const dayStr = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" }).format(d);
-        return {
-          day: dayStr,
-          temp: `${baseTemp + c.offsetTemp}°C`,
-          desc: c.desc,
-          rain: c.rain,
-          icon: c.icon
-        };
+    const controller = new AbortController();
+    const query = new URLSearchParams({
+      city: tripCity,
+      region: tripRegion,
+      country: tripCountry,
+      countryCode: inferredCountryCode,
+    });
+    Promise.resolve()
+      .then(() => {
+        if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+        setWeatherLoading(true);
+        setWeatherError("");
+        return fetch(`/api/weather?${query.toString()}`, { cache: "no-store", signal: controller.signal });
       })
-    };
-  }, [activeTrip?.startDate, mapPins, tripName]);
+      .then(async (response) => {
+        const body = await response.json() as WeatherForecast & { error?: string };
+        if (!response.ok) throw new Error(body.error || "Weather is unavailable.");
+        return body;
+      })
+      .then((forecast) => {
+        setWeatherForecast(forecast);
+        setWeatherLocationKey(requestedWeatherKey);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setWeatherForecast(null);
+        setWeatherLocationKey(requestedWeatherKey);
+        setWeatherError(error instanceof Error ? error.message : "Weather is unavailable.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setWeatherLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [activeTrip?.id, tripCity, tripRegion, tripCountry, inferredCountryCode, requestedWeatherKey]);
+
+  const weatherIsCurrent = weatherLocationKey === requestedWeatherKey;
+  const currentWeatherError = !tripCity ? "Choose a city in trip details." : weatherIsCurrent ? weatherError : "";
+  const currentWeatherLoading = !!tripCity && (!weatherIsCurrent || weatherLoading);
+  const dynamicWeatherForecast: WeatherForecast = (weatherIsCurrent ? weatherForecast : null) || {
+    destination: tripCity || "Trip location",
+    region: tripRegion,
+    country: tripCountry,
+    days: [],
+  };
 
   // Compute arrival transport / flight banner from itinerary or wallet
   const mainArrivalEvent = useMemo(() => {
@@ -514,7 +909,11 @@ export default function Home() {
   // Trip data can only be created, edited, or deleted while signed in, so it
   // always has an account to sync to. Guests get a read-only view.
   function requireSignIn(action: string): boolean {
-    if (user) return true;
+    if (user && profileReady) return true;
+    if (user) {
+      notify("Your Firebase profile is still loading. Try again in a moment.");
+      return false;
+    }
     setPlannerOpen(null);
     setAuthError("");
     setAuthModalOpen(true);
@@ -571,9 +970,6 @@ export default function Home() {
       await signOut(auth);
       setAuthPassword("");
       setAuthModalOpen(false);
-      setSavedTrips([]);
-      setActiveTripId("");
-      setActiveDay(0);
       notify("Logged out successfully");
     } catch (err) {
       setAuthError(friendlyAuthError(err));
@@ -585,53 +981,54 @@ export default function Home() {
   // Trip & Itinerary Handlers - Multi-Trip
   function createTrip(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!requireSignIn("create a trip")) return;
+    if (!user || !profileReady) {
+      requireSignIn("create a trip");
+      return;
+    }
     const form = new FormData(event.currentTarget);
-    const name = String(form.get("name") || "My Trip");
-    const route = String(form.get("route") || "Custom Route");
+    const location = locationFromForm(form);
+    const name = String(form.get("name") || `${location.city} trip` || "My Trip").trim();
+    const route = [location.city, location.region, location.country].filter(Boolean).join(", ");
     const start = String(form.get("start") || "");
+    const end = String(form.get("end") || "");
+    if (!start || !end || end < start) {
+      notify("Choose an end date on or after the start date.");
+      return;
+    }
     const travelersCount = Number(form.get("travelers") || 1);
     const date = start ? new Date(`${start}T12:00:00`) : new Date();
 
     const firstDay: Day = {
       id: "day-" + crypto.randomUUID(),
+      isoDate: start || date.toISOString().slice(0, 10),
       date: String(date.getDate()).padStart(2, "0"),
       short: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date).toUpperCase(),
       label: String(form.get("firstDay") || "Arrival"),
       events: [],
     };
 
-    const routeParts = route.split(/→|->|,|-/).map((s) => s.trim()).filter(Boolean);
-    const newPins: MapPin[] = (routeParts.length > 0 ? routeParts : [name]).slice(0, 5).map((loc, idx) => ({
-      name: loc,
-      code: loc.substring(0, 3).toUpperCase(),
-      desc: idx === 0 ? "Starting point" : `Stop #${idx + 1} on route`,
-      temp: `${Math.floor(Math.random() * 8) + 16}°C`,
-    }));
+    const newPins: MapPin[] = [{
+      name: location.city,
+      code: location.city.substring(0, 3).toUpperCase(),
+      desc: [location.region, location.country].filter(Boolean).join(", "),
+      temp: "",
+    }];
 
     const defaultOrganizer: Traveler = {
       name: user.displayName || user.email?.split("@")[0] || "Organizer",
       role: "Trip organizer",
-      email: user.email || "organizer@example.com",
+      email: user.email || "",
       avatar: (user.displayName || user.email || "OR").slice(0, 2).toUpperCase(),
       bg: "avatar-me",
     };
     const newTravelers: Traveler[] = [defaultOrganizer];
-    for (let i = 1; i < travelersCount; i++) {
-      newTravelers.push({
-        name: `Traveler ${i + 1}`,
-        role: "Traveler",
-        email: `traveler${i + 1}@example.com`,
-        avatar: `T${i + 1}`,
-        bg: ["peach", "blue", "green", "coral"][i % 4],
-      });
-    }
 
     const newTripObj: Trip = {
       id: "trip-" + crypto.randomUUID(),
       name,
       route,
       startDate: start || date.toISOString().slice(0, 10),
+      endDate: end,
       travelersCount,
       days: [firstDay],
       expenses: [],
@@ -639,6 +1036,7 @@ export default function Home() {
       mapPins: newPins,
       travelersList: newTravelers,
       guestFlights: [],
+      ...location,
     };
 
     setSavedTrips((prev) => [newTripObj, ...prev]);
@@ -646,20 +1044,118 @@ export default function Home() {
     setActiveDay(0);
     setSelectedMapPin(newPins[0]?.name || name);
     setPlannerOpen(null);
+    setActiveNav("Overview");
+    setAppView("trip");
     notify(`New itinerary "${name}" created!`);
   }
 
-  function deleteTrip(id: string, event: React.MouseEvent) {
-    event.stopPropagation();
-    if (!requireSignIn("delete a trip")) return;
-    const target = savedTrips.find((t) => t.id === id);
-    const newTrips = savedTrips.filter((t) => t.id !== id);
-    setSavedTrips(newTrips);
+  function editTripDetails(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeTrip || !requireSignIn("edit your trip details")) return;
+    const form = new FormData(event.currentTarget);
+    const location = locationFromForm(form);
+    const name = String(form.get("name") || activeTrip.name).trim();
+    const startDate = String(form.get("start") || activeTrip.startDate);
+    const endDate = String(form.get("end") || activeTrip.endDate || startDate);
+    if (!startDate || !endDate || endDate < startDate) {
+      notify("Choose an end date on or after the start date.");
+      return;
+    }
+    const parsedStart = new Date(`${startDate}T12:00:00`);
+    const route = [location.city, location.region, location.country].filter(Boolean).join(", ");
+    updateActiveTrip((trip) => ({
+      ...trip,
+      ...location,
+      name,
+      route,
+      startDate,
+      endDate,
+      days: trip.days.map((tripDay, index) => index === 0 && (!tripDay.isoDate || tripDay.isoDate === trip.startDate) ? {
+        ...tripDay,
+        isoDate: startDate,
+        date: String(parsedStart.getDate()).padStart(2, "0"),
+        short: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(parsedStart).toUpperCase(),
+      } : tripDay),
+      mapPins: trip.mapPins.length > 0
+        ? trip.mapPins.map((pin, index) => index === 0 ? {
+          ...pin,
+          name: location.city,
+          code: location.city.substring(0, 3).toUpperCase(),
+          desc: [location.region, location.country].filter(Boolean).join(", "),
+          temp: "",
+        } : pin)
+        : [{
+          name: location.city,
+          code: location.city.substring(0, 3).toUpperCase(),
+          desc: [location.region, location.country].filter(Boolean).join(", "),
+          temp: "",
+        }],
+      expenses: trip.expenses.map((expense) => ({ ...expense, currency: location.currency })),
+    }));
+    setSelectedMapPin(location.city);
+    setPlannerOpen(null);
+    notify(`Updated ${name}'s location, currency, and weather.`);
+  }
+
+  function openTrip(tripId: string) {
+    setActiveTripId(tripId);
+    setActiveDay(0);
+    setActiveNav("Overview");
+    setPlannerOpen(null);
+    setAppView("trip");
+  }
+
+  function archiveTrip(id: string) {
+    if (!requireSignIn("archive a trip")) return;
+    const target = savedTrips.find((trip) => trip.id === id);
+    if (!target) return;
+    const archivedAt = new Date().toISOString();
+    const nextActiveTrip = savedTrips.find((trip) => trip.id !== id && !trip.archivedAt && !isTripCompleted(trip));
+    setSavedTrips((trips) => trips.map((trip) => trip.id === id ? { ...trip, archivedAt } : trip));
     if (activeTripId === id) {
-      setActiveTripId(newTrips[0]?.id ?? "");
+      setActiveTripId(nextActiveTrip?.id ?? "");
       setActiveDay(0);
     }
-    notify(`Itinerary "${target?.name || "Trip"}" deleted.`);
+    if (appView === "trip") setAppView("trips");
+    setLibraryFilter("active");
+    setPlannerOpen(null);
+    notify(`Archived "${target.name}". Its itinerary is still saved.`);
+  }
+
+  function restoreTrip(id: string) {
+    if (!requireSignIn("restore a trip")) return;
+    const target = savedTrips.find((trip) => trip.id === id);
+    if (!target) return;
+    setSavedTrips((trips) => trips.map((trip) => {
+      if (trip.id !== id) return trip;
+      const restored = { ...trip };
+      delete restored.archivedAt;
+      return restored;
+    }));
+    setLibraryFilter("active");
+    notify(`Restored "${target.name}" to active trips.`);
+  }
+
+  function requestPermanentDelete(id: string) {
+    if (!requireSignIn("delete a trip")) return;
+    setPlannerOpen(null);
+    setPendingDeleteTripId(id);
+  }
+
+  function confirmPermanentDelete() {
+    if (!pendingDeleteTrip || !requireSignIn("delete a trip")) return;
+    const id = pendingDeleteTrip.id;
+    const name = pendingDeleteTrip.name;
+    const remainingTrips = savedTrips.filter((trip) => trip.id !== id);
+    const nextActiveTrip = remainingTrips.find((trip) => !trip.archivedAt && !isTripCompleted(trip)) || remainingTrips[0];
+    setSavedTrips(remainingTrips);
+    if (activeTripId === id) {
+      setActiveTripId(nextActiveTrip?.id ?? "");
+      setActiveDay(0);
+      setAppView("trips");
+    }
+    setPendingDeleteTripId(null);
+    notify(`Permanently deleted "${name}" from your profile.`);
   }
 
   function addDay(event: FormEvent<HTMLFormElement>) {
@@ -674,6 +1170,7 @@ export default function Home() {
     })();
     const newDay: Day = {
       id: "day-" + crypto.randomUUID(),
+      isoDate: entered || date.toISOString().slice(0, 10),
       date: String(date.getDate()).padStart(2, "0"),
       short: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date).toUpperCase(),
       label: String(form.get("label") || "New Day"),
@@ -690,9 +1187,19 @@ export default function Home() {
     if (!requireSignIn("edit this day")) return;
     const form = new FormData(event.currentTarget);
     const newLabel = String(form.get("label") || day.label);
+    const enteredDate = String(form.get("date") || day.isoDate || "");
+    const parsedDate = enteredDate ? new Date(`${enteredDate}T12:00:00`) : null;
     updateActiveTrip((trip) => ({
       ...trip,
-      days: trip.days.map((d, index) => (index === activeDay ? { ...d, label: newLabel } : d)),
+      days: trip.days.map((d, index) => (index === activeDay ? {
+        ...d,
+        label: newLabel,
+        ...(parsedDate && !Number.isNaN(parsedDate.getTime()) ? {
+          isoDate: enteredDate,
+          date: String(parsedDate.getDate()).padStart(2, "0"),
+          short: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(parsedDate).toUpperCase(),
+        } : {}),
+      } : d)),
     }));
     setPlannerOpen(null);
     notify("Day title updated!");
@@ -1059,7 +1566,7 @@ export default function Home() {
       id: "exp-" + crypto.randomUUID(),
       description: String(form.get("description") || "Expense"),
       amount,
-      currency: String(form.get("currency") || "CHF"),
+      currency: String(form.get("currency") || tripCurrency),
       paidBy: String(form.get("paidBy") || travelersList[0]?.name || "Organizer"),
       date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
       category: String(form.get("category") || "General"),
@@ -1186,6 +1693,182 @@ export default function Home() {
     notify(`Offline map for ${pinName} ${pin?.savedOffline ? "removed" : "downloaded and saved"}!`);
   }
 
+  if (authChecking) {
+    return (
+      <main className="auth-gate auth-gate-loading" aria-live="polite">
+        <div className="auth-gate-brand"><span className="brand-mark">J</span><strong>JourneySync</strong></div>
+        <div className="auth-loader" aria-hidden="true" />
+        <p>Checking your Firebase account…</p>
+      </main>
+    );
+  }
+
+  if (!user) {
+    return (
+      <main className="auth-gate">
+        <section className="auth-gate-intro" aria-label="JourneySync introduction">
+          <div className="auth-gate-brand"><span className="brand-mark">J</span><strong>JourneySync</strong></div>
+          <div>
+            <span className="eyebrow">EVERY PLAN · EVERY PERSON · ONE JOURNEY</span>
+            <h1>Your trips,<br />all in one place.</h1>
+            <p>Build itineraries, keep travel details together, and return to every saved trip from one private account.</p>
+          </div>
+          <small>Trip data is saved to your Firebase profile.</small>
+        </section>
+
+        <section className="auth-gate-panel" aria-labelledby="auth-page-title">
+          <div className="auth-card">
+            <span className="eyebrow">FIREBASE ACCOUNT</span>
+            <h2 id="auth-page-title">{authMode === "login" ? "Welcome back" : "Create your account"}</h2>
+            <p>{authMode === "login" ? "Sign in to see your trips." : "Create an account to save your first trip."}</p>
+
+            <div className="auth-tabs">
+              <button type="button" className={`auth-tab ${authMode === "login" ? "active" : ""}`} onClick={() => { setAuthMode("login"); setAuthError(""); }} disabled={authLoading}>Sign In</button>
+              <button type="button" className={`auth-tab ${authMode === "signup" ? "active" : ""}`} onClick={() => { setAuthMode("signup"); setAuthError(""); }} disabled={authLoading}>Register</button>
+            </div>
+
+            <form onSubmit={handleAuthSubmit}>
+              <label>Email Address
+                <input type="email" value={authEmail} onChange={(event) => { setAuthEmail(event.target.value); setAuthError(""); }} required placeholder="you@example.com" autoComplete="email" disabled={authLoading} />
+              </label>
+              <label>Password
+                <input type="password" value={authPassword} onChange={(event) => { setAuthPassword(event.target.value); setAuthError(""); }} required placeholder="••••••••" autoComplete={authMode === "login" ? "current-password" : "new-password"} disabled={authLoading} />
+              </label>
+
+              {authError && <div className="auth-error" role="alert">{authError}</div>}
+
+              <button className="primary-action auth-submit" type="submit" disabled={authLoading}>
+                {authLoading ? "Connecting to Firebase…" : authMode === "login" ? "Sign In" : "Create Account"}
+              </button>
+            </form>
+
+            <div className="auth-divider">OR</div>
+            <button type="button" className="google-btn" onClick={handleGoogleAuth} disabled={authLoading}>
+              {authLoading ? "Please wait…" : "Continue with Google"}
+            </button>
+            <p className="auth-help">Use Chrome or Edge for Google sign-in. Your session stays signed in when you return.</p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!profileReady) {
+    return (
+      <main className="auth-gate auth-gate-loading" aria-live="polite">
+        <div className="auth-gate-brand"><span className="brand-mark">J</span><strong>JourneySync</strong></div>
+        <div className="auth-loader" aria-hidden="true" />
+        <h1>Loading your trips</h1>
+        <p>JourneySync is checking your Firebase profile.</p>
+      </main>
+    );
+  }
+
+  if (appView === "trips") {
+    return (
+      <main className="trip-library-shell">
+        <header className="trip-library-header">
+          <div className="auth-gate-brand"><span className="brand-mark">J</span><strong>JourneySync</strong></div>
+          <div className="trip-library-account">
+            <span className="avatar avatar-me">{(user.displayName || user.email || "JS").slice(0, 2).toUpperCase()}</span>
+            <span><strong>{user.displayName || user.email?.split("@")[0] || "Traveler"}</strong><small>{cloudReady && synced ? "Firebase synced" : cloudReady ? "Saving changes" : "Saved on this device"}</small></span>
+            <button type="button" onClick={handleLogOut} disabled={authLoading}>{authLoading ? "Signing out…" : "Sign out"}</button>
+          </div>
+        </header>
+
+        <section className="trip-library-content">
+          <div className="trip-library-heading">
+            <div>
+              <span className="eyebrow">YOUR JOURNEYS</span>
+              <h1>{libraryFilter === "active" ? "Active and upcoming trips" : "Archived trips"}</h1>
+              <p>{libraryFilter === "active" ? "Completed trips move to Archived automatically, where their full itinerary stays saved." : "Open an old itinerary, restore a manually archived trip, or delete one permanently."}</p>
+            </div>
+            <button className="primary-action trip-library-create" onClick={() => setPlannerOpen("trip")}>＋ Create a trip</button>
+          </div>
+
+          <div className="trip-library-filters" role="tablist" aria-label="Filter trips">
+            <button type="button" role="tab" aria-selected={libraryFilter === "active"} className={libraryFilter === "active" ? "active" : ""} onClick={() => setLibraryFilter("active")}>Active and upcoming <span>{activeTrips.length}</span></button>
+            <button type="button" role="tab" aria-selected={libraryFilter === "archived"} className={libraryFilter === "archived" ? "active" : ""} onClick={() => setLibraryFilter("archived")}>Archived <span>{archivedTrips.length}</span></button>
+          </div>
+
+          {visibleTrips.length > 0 ? (
+            <div className="trip-library-grid">
+              {visibleTrips.map((trip) => {
+                const activityCount = trip.days.reduce((total, tripDay) => total + tripDay.events.length, 0);
+                const completed = isTripCompleted(trip);
+                return (
+                  <article className={`trip-library-card${libraryFilter === "archived" ? " archived" : ""}`} key={trip.id}>
+                    <button type="button" className="trip-library-card-main" onClick={() => openTrip(trip.id)} aria-label={`Open ${trip.name}`}>
+                      <span className="trip-library-card-mark" aria-hidden="true">✦</span>
+                      <span className="trip-library-card-copy">
+                        <small>{libraryFilter === "active" ? activeTripStatus(trip) : completed ? "Completed" : "Archived"} · {formatTripStartDate(trip.startDate)}</small>
+                        <strong>{trip.name}</strong>
+                        <span>{trip.route || "Route not set"}</span>
+                      </span>
+                      <span className="trip-library-card-arrow" aria-hidden="true">→</span>
+                    </button>
+                    <div className="trip-library-card-meta">
+                      <span><strong>{trip.days.length}</strong> days</span>
+                      <span><strong>{activityCount}</strong> plans</span>
+                      <span><strong>{trip.travelersCount}</strong> traveler{trip.travelersCount === 1 ? "" : "s"}</span>
+                    </div>
+                    <div className="trip-library-card-actions">
+                      {libraryFilter === "active" ? (
+                        <button type="button" onClick={() => archiveTrip(trip.id)}>Archive trip</button>
+                      ) : !completed && trip.archivedAt ? (
+                        <button type="button" onClick={() => restoreTrip(trip.id)}>Restore trip</button>
+                      ) : (
+                        <span>Itinerary kept for your records</span>
+                      )}
+                      <button type="button" className="delete" onClick={() => requestPermanentDelete(trip.id)}>Delete permanently</button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="trip-library-empty">
+              <span aria-hidden="true">✦</span>
+              <h2>{libraryFilter === "active" ? "No active trips" : "No archived trips"}</h2>
+              <p>{libraryFilter === "active" ? "Create a trip to start planning. Nothing is prefilled or added as a demo." : "Completed and manually archived trips will appear here."}</p>
+              {libraryFilter === "active" ? (
+                <button className="primary-action" onClick={() => setPlannerOpen("trip")}>Create your first trip</button>
+              ) : (
+                <button className="secondary-action" onClick={() => setLibraryFilter("active")}>View active trips</button>
+              )}
+            </div>
+          )}
+        </section>
+
+        {plannerOpen === "trip" && (
+          <div className="modal-backdrop" onMouseDown={() => setPlannerOpen(null)}>
+            <section className="modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a trip">
+              <button className="modal-close" onClick={() => setPlannerOpen(null)} aria-label="Close create trip dialog">×</button>
+              <form onSubmit={createTrip}>
+                <span className="eyebrow">NEW ITINERARY</span>
+                <h2>Create any trip</h2>
+                <label>Trip name<input name="name" placeholder="e.g. Spring break" required autoFocus /></label>
+                <TripLocationFields />
+                <TripDateFields />
+                <div className="form-row">
+                  <label>Travelers<input name="travelers" type="number" min="1" defaultValue="1" /></label>
+                  <label>First day title<input name="firstDay" placeholder="e.g. Arrival" /></label>
+                </div>
+                <button className="primary-action">Create itinerary</button>
+              </form>
+            </section>
+          </div>
+        )}
+
+        {pendingDeleteTrip && (
+          <DeleteTripDialog trip={pendingDeleteTrip} onCancel={() => setPendingDeleteTripId(null)} onConfirm={confirmPermanentDelete} />
+        )}
+
+        {toast && <div className="toast" role="status">{toast}</div>}
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       {/* Mobile Overlay Drawer backdrop */}
@@ -1238,14 +1921,15 @@ export default function Home() {
               notify("Create a trip before saving offline");
               return;
             }
-            writeLocalTrips(user.uid, normalizeTripCache(savedTrips, activeTripId));
-            setOfflineCachedAt(new Date().toISOString());
-            notify("Offline cache refreshed");
+            const updatedAt = Date.now();
+            writeLocalTrips(user.uid, normalizeTripCache(savedTrips, activeTripId, updatedAt));
+            setOfflineCachedAt(new Date(updatedAt).toISOString());
+            notify("Device backup refreshed");
           }}>
             <span className="download-icon">↓</span>
             <span>
-              <strong>{offlineCachedAt ? "Available offline" : "Save for offline"}</strong>
-              <small>{offlineCachedAt ? "Updated just now" : "Cache this device"}</small>
+              <strong>{offlineCachedAt ? "Saved on this device" : "Back up on this device"}</strong>
+              <small>{offlineCachedAt ? "Ready if your connection drops" : "Keep an account-scoped copy"}</small>
             </span>
             <i>{offlineCachedAt ? "✓" : ""}</i>
           </button>
@@ -1264,7 +1948,7 @@ export default function Home() {
             </span>
             <span>
               <strong>{user ? (user.displayName || user.email?.split("@")[0]) : "Guest"}</strong>
-              <small>{authChecking ? "Checking account…" : user ? (!cloudHydrated ? "Signed in · Loading your trips" : synced ? "Signed in · Cloud synced" : "Signed in · Sync paused") : "Sign in to view your trips"}</small>
+              <small>{authChecking ? "Checking account…" : user ? (!profileReady ? "Signed in · Loading your trips" : !cloudReady ? "Signed in · Saved on device" : synced ? "Signed in · Cloud synced" : "Signed in · Saving changes") : "Sign in to view your trips"}</small>
             </span>
             <span>•••</span>
           </button>
@@ -1277,8 +1961,8 @@ export default function Home() {
           <button className="mobile-menu" aria-label="Open menu" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>≡</button>
 
           <div className="trip-switcher">
-            <span className="flag" onClick={() => setPlannerOpen("trip-switcher")} style={{ cursor: "pointer" }}>✦</span>
-            <span onClick={() => setPlannerOpen("trip-switcher")} style={{ cursor: "pointer" }} title="Click to switch trips">
+            <span className="flag" onClick={() => setAppView("trips")} style={{ cursor: "pointer" }}>✦</span>
+            <span onClick={() => setAppView("trips")} style={{ cursor: "pointer" }} title="Return to all trips">
               <small>CURRENT TRIP ▾ ({savedTrips.length})</small>
               <strong>{tripName}</strong>
             </span>
@@ -1286,6 +1970,7 @@ export default function Home() {
           </div>
 
           <div className="top-actions">
+            <button className="all-trips-button" type="button" onClick={() => setAppView("trips")}>← All trips</button>
             <button className="icon-button" aria-label="Notifications" onClick={() => setNotificationsOpen(!notificationsOpen)}>
               ●<i />
             </button>
@@ -1309,25 +1994,27 @@ export default function Home() {
                   <h3>Trip Notifications</h3>
                   <button style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "11px", color: "var(--coral)" }} onClick={() => setNotificationsOpen(false)}>Close</button>
                 </div>
+                {mainArrivalEvent && (
+                  <div className="notification-item">
+                    <div className="notification-icon">{mainArrivalEvent.kind === "flight" ? "✈" : "↗"}</div>
+                    <div>
+                      <strong>{mainArrivalEvent.title}</strong>
+                      <p style={{ margin: "2px 0 0", color: "#64748b" }}>{mainArrivalEvent.time} · {mainArrivalEvent.meta || "Added to your itinerary"}</p>
+                    </div>
+                  </div>
+                )}
                 <div className="notification-item">
-                  <div className="notification-icon">✈</div>
+                  <div className="notification-icon">≡</div>
                   <div>
-                    <strong>Flight LX 017 Gate Assigned</strong>
-                    <p style={{ margin: "2px 0 0", color: "#64748b" }}>Gate E52 confirmed for Departure at 8:40 AM.</p>
+                    <strong>{tripName} is ready</strong>
+                    <p style={{ margin: "2px 0 0", color: "#64748b" }}>{itineraryDays.length} day{itineraryDays.length === 1 ? "" : "s"} and {itineraryDays.reduce((total, tripDay) => total + tripDay.events.length, 0)} saved plan{itineraryDays.reduce((total, tripDay) => total + tripDay.events.length, 0) === 1 ? "" : "s"}.</p>
                   </div>
                 </div>
                 <div className="notification-item">
-                  <div className="notification-icon">☀</div>
+                  <div className="notification-icon">✓</div>
                   <div>
-                    <strong>Zürich Weather Alert</strong>
-                    <p style={{ margin: "2px 0 0", color: "#64748b" }}>Partly sunny, 18°C expected for your arrival date.</p>
-                  </div>
-                </div>
-                <div className="notification-item">
-                  <div className="notification-icon">💳</div>
-                  <div>
-                    <strong>Expense Split Added</strong>
-                    <p style={{ margin: "2px 0 0", color: "#64748b" }}>Amelia paid CHF 42.40 for Zürich HB Passes.</p>
+                    <strong>{cloudReady && synced ? "Firebase profile synced" : "Profile saved on this device"}</strong>
+                    <p style={{ margin: "2px 0 0", color: "#64748b" }}>{cloudReady && synced ? "Your latest trip changes are stored in Firestore." : "JourneySync will sync when Firebase is available."}</p>
                   </div>
                 </div>
               </div>
@@ -1341,13 +2028,24 @@ export default function Home() {
               <div className="eyebrow"><span /> {itineraryDays.length} DAYS · {tripTravelers} TRAVELER{tripTravelers === 1 ? "" : "S"}</div>
               <h1>{tripName}</h1>
               <p>{tripRoute}</p>
+              <div className="trip-management-actions">
+                <button className="trip-details-button" type="button" onClick={() => openMutationPanel("trip-settings")}>Edit trip details</button>
+                {activeTrip?.archivedAt && !isTripCompleted(activeTrip) ? (
+                  <button className="trip-details-button" type="button" onClick={() => restoreTrip(activeTrip.id)}>Restore trip</button>
+                ) : !activeTrip?.archivedAt && activeTrip && !isTripCompleted(activeTrip) ? (
+                  <button className="trip-details-button" type="button" onClick={() => archiveTrip(activeTrip.id)}>Archive trip</button>
+                ) : (
+                  <span className="trip-completed-label">Completed and archived</span>
+                )}
+                {activeTrip && <button className="trip-details-button delete" type="button" onClick={() => requestPermanentDelete(activeTrip.id)}>Delete trip</button>}
+              </div>
             </div>
             <div className="date-range">
               <span>{tripDateRange.startDate}</span>
-              <div><small>{tripDateRange.month}</small><strong>{tripDateRange.year}</strong></div>
-              <i>—</i>
+              <div><small>{tripDateRange.startMonth}</small><strong>{tripDateRange.startYear}</strong></div>
+              <i>-</i>
               <span>{tripDateRange.endDate}</span>
-              <div><small>{tripDateRange.month}</small><strong>{tripDateRange.year}</strong></div>
+              <div><small>{tripDateRange.endMonth}</small><strong>{tripDateRange.endYear}</strong></div>
             </div>
           </div>
 
@@ -1389,7 +2087,7 @@ export default function Home() {
                 </div>
                 <div className="overview-card">
                   <small>TOTAL EXPENSES</small>
-                  <strong>CHF {totalExpenseAmount.toFixed(2)}</strong>
+                  <strong>{tripCurrency} {totalExpenseAmount.toFixed(2)}</strong>
                   <p>Split across {travelersList.length} Travelers</p>
                 </div>
                 <div className="overview-card">
@@ -1400,7 +2098,7 @@ export default function Home() {
                 <div className="overview-card">
                   <small>TRAVEL TEAM</small>
                   <strong>{travelersList.length} Members</strong>
-                  <p>Organized by Manav S.</p>
+                  <p>Organized by {user.displayName || user.email?.split("@")[0] || "you"}.</p>
                 </div>
               </div>
 
@@ -1434,17 +2132,17 @@ export default function Home() {
                 <aside className="right-rail">
                   <section className="weather-card" onClick={() => setPlannerOpen("weather")} style={{ cursor: "pointer" }}>
                     <div>
-                      <small>{dynamicWeatherForecast.destination.toUpperCase()} · {dynamicWeatherForecast.days[0]?.day || "DAY 1"}</small>
-                      <strong>{dynamicWeatherForecast.days[0]?.temp || "18°C"}</strong>
-                      <span>{dynamicWeatherForecast.days[0]?.desc || "Partly cloudy"} (Click for 5-Day)</span>
+                      <small>{dynamicWeatherForecast.destination.toUpperCase()} · {dynamicWeatherForecast.days[0]?.day || "LIVE WEATHER"}</small>
+                      <strong>{currentWeatherLoading ? "Loading…" : dynamicWeatherForecast.days[0]?.temp || "Unavailable"}</strong>
+                      <span>{currentWeatherError || dynamicWeatherForecast.days[0]?.desc || "Choose a city in trip details"}</span>
                     </div>
-                    <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "☀"}</i><b>☁</b></div>
-                    <div className="weather-meta"><span>H {parseInt(dynamicWeatherForecast.days[0]?.temp || "20") + 2}°</span><span>L {parseInt(dynamicWeatherForecast.days[0]?.temp || "11") - 5}°</span><span>Rain {dynamicWeatherForecast.days[0]?.rain || "10%"}</span></div>
+                    <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "🌐"}</i><b>☁</b></div>
+                    <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Rain {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
                   </section>
 
                   <section className="expense-card">
                     <div className="rail-heading"><span>EXPENSES SNAPSHOT</span><button onClick={() => openMutationPanel("expense")}>＋</button></div>
-                    <strong className="expense-total">CHF {totalExpenseAmount.toFixed(2)}</strong>
+                    <strong className="expense-total">{tripCurrency} {totalExpenseAmount.toFixed(2)}</strong>
                     <button className="text-link" onClick={() => setActiveNav("Expenses")}>View Full Expense Breakdown <span>→</span></button>
                   </section>
                 </aside>
@@ -1484,7 +2182,7 @@ export default function Home() {
                     ) : (
                       <label className="flight-code-field">Flight code<input name="flightNumber" placeholder="AA 100" autoCapitalize="characters" required /></label>
                     )}
-                    <label>Departure date<input name="departureDate" type="date" defaultValue={activeTrip.startDate || ""} required /></label>
+                    <label>Departure date<input name="departureDate" type="date" defaultValue={activeTrip?.startDate || ""} required /></label>
                     <button className="primary-action live-search-button" disabled={flightSearchBusy}>
                       {flightSearchBusy ? "Checking AeroDataBox…" : "Search live flights"}
                     </button>
@@ -1711,12 +2409,12 @@ export default function Home() {
               <aside className="right-rail">
                 <section className="weather-card" onClick={() => setPlannerOpen("weather")} style={{ cursor: "pointer" }}>
                   <div>
-                    <small>{dynamicWeatherForecast.destination.toUpperCase()} · {dynamicWeatherForecast.days[0]?.day || "DAY 1"}</small>
-                    <strong>{dynamicWeatherForecast.days[0]?.temp || "18°C"}</strong>
-                    <span>{dynamicWeatherForecast.days[0]?.desc || "Partly cloudy"} (Click for 5-Day)</span>
+                    <small>{dynamicWeatherForecast.destination.toUpperCase()} · {dynamicWeatherForecast.days[0]?.day || "LIVE WEATHER"}</small>
+                    <strong>{currentWeatherLoading ? "Loading…" : dynamicWeatherForecast.days[0]?.temp || "Unavailable"}</strong>
+                    <span>{currentWeatherError || dynamicWeatherForecast.days[0]?.desc || "Choose a city in trip details"}</span>
                   </div>
-                  <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "☀"}</i><b>☁</b></div>
-                  <div className="weather-meta"><span>H {parseInt(dynamicWeatherForecast.days[0]?.temp || "20") + 2}°</span><span>L {parseInt(dynamicWeatherForecast.days[0]?.temp || "11") - 5}°</span><span>Rain {dynamicWeatherForecast.days[0]?.rain || "10%"}</span></div>
+                  <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "🌐"}</i><b>☁</b></div>
+                  <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Rain {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
                 </section>
 
                 <section className="expense-card">
@@ -1724,14 +2422,14 @@ export default function Home() {
                     <span>GROUP EXPENSES</span>
                     <button onClick={() => openMutationPanel("expense")}>＋</button>
                   </div>
-                  <strong className="expense-total">CHF {totalExpenseAmount.toFixed(2)}</strong>
+                  <strong className="expense-total">{tripCurrency} {totalExpenseAmount.toFixed(2)}</strong>
                   <small>Total spent so far</small>
                   <div className="balances">
                     {expenseBalances.slice(0, 2).map((person) => (
                       <div key={person.email}>
                         <span className={`avatar ${person.bg}`}>{person.avatar}</span>
                         <p><strong>{person.name.split(" ")[0]}</strong><small>{person.balance >= 0 ? "is owed" : "owes"}</small></p>
-                        <b className={person.balance >= 0 ? "positive" : "negative"}>{person.balance >= 0 ? "+" : "-"} CHF {Math.abs(person.balance).toFixed(2)}</b>
+                        <b className={person.balance >= 0 ? "positive" : "negative"}>{person.balance >= 0 ? "+" : "-"} {tripCurrency} {Math.abs(person.balance).toFixed(2)}</b>
                       </div>
                     ))}
                   </div>
@@ -1830,15 +2528,15 @@ export default function Home() {
               <aside className="right-rail">
                 <section className="expense-card" style={{ background: "white" }}>
                   <div className="rail-heading"><span>BALANCE SUMMARY</span></div>
-                  <strong className="expense-total">CHF {totalExpenseAmount.toFixed(2)}</strong>
+                  <strong className="expense-total">{tripCurrency} {totalExpenseAmount.toFixed(2)}</strong>
                   <small>Total spent across all categories</small>
 
                   <div className="balances" style={{ marginTop: "16px" }}>
                     {expenseBalances.map((person) => (
                       <div key={person.email}>
                         <span className={`avatar ${person.bg}`}>{person.avatar}</span>
-                        <p><strong>{person.name}</strong><small>Paid total CHF {person.paid.toFixed(2)}</small></p>
-                        <b className={person.balance >= 0 ? "positive" : "negative"}>{person.balance >= 0 ? "+" : "-"} CHF {Math.abs(person.balance).toFixed(2)}</b>
+                        <p><strong>{person.name}</strong><small>Paid total {tripCurrency} {person.paid.toFixed(2)}</small></p>
+                        <b className={person.balance >= 0 ? "positive" : "negative"}>{person.balance >= 0 ? "+" : "-"} {tripCurrency} {Math.abs(person.balance).toFixed(2)}</b>
                       </div>
                     ))}
                   </div>
@@ -1908,9 +2606,9 @@ export default function Home() {
                 <p style={{ fontSize: "11px", color: "#475569", marginBottom: "16px" }}>
                   Signed in as <strong>{user.email}</strong>
                 </p>
-                <div className={`auth-sync-status ${synced ? "is-synced" : "is-paused"}`}>
-                  <strong>{synced ? "Cloud sync is active" : "Cloud sync needs attention"}</strong>
-                  <small>{synced ? "Your itinerary is backed up to Firestore." : "Your local trip is safe. JourneySync will retry cloud sync."}</small>
+                <div className={`auth-sync-status ${cloudReady && synced ? "is-synced" : "is-paused"}`}>
+                  <strong>{!profileReady ? "Loading your profile" : !cloudReady ? "Saved on this device" : synced ? "Cloud sync is active" : "Saving changes"}</strong>
+                  <small>{!profileReady ? "JourneySync is checking Firebase for your trips." : !cloudReady ? "Firebase is unavailable. Your account-specific device copy will sync after reconnecting." : synced ? "Your itinerary is backed up to Firestore." : "Your device copy is safe while JourneySync finishes the Firestore update."}</small>
                 </div>
                 {authError && <div className="auth-error" role="alert">{authError}</div>}
                 <button className="danger-action" onClick={handleLogOut} disabled={authLoading}>
@@ -2056,7 +2754,7 @@ export default function Home() {
                 <label>Origin<input name="origin" placeholder="JFK" maxLength={3} required /></label>
                 <label>Destination<input name="destination" placeholder="ZRH" maxLength={3} required /></label>
               </div>
-              <label>Local departure date<input name="departureDate" type="date" defaultValue={activeTrip.startDate || ""} required /></label>
+              <label>Local departure date<input name="departureDate" type="date" defaultValue={activeTrip?.startDate || ""} required /></label>
               <div className="form-row">
                 <label>Departure<input name="departure" type="time" required /></label>
                 <label>Arrival<input name="arrival" type="time" required /></label>
@@ -2086,7 +2784,7 @@ export default function Home() {
                 <label>Origin<input name="origin" defaultValue={selectedGuestFlight?.flight.origin || ""} maxLength={3} placeholder="JFK" required /></label>
                 <label>Destination<input name="destination" defaultValue={selectedGuestFlight?.flight.destination || ""} maxLength={3} placeholder="LHR" required /></label>
               </div>
-              <label>Local departure date<input name="departureDate" type="date" defaultValue={selectedGuestFlight?.flight.departureDate || activeTrip.startDate || ""} required /></label>
+              <label>Local departure date<input name="departureDate" type="date" defaultValue={selectedGuestFlight?.flight.departureDate || activeTrip?.startDate || ""} required /></label>
               <div className="form-row">
                 <label>Scheduled departure<input name="departure" defaultValue={selectedGuestFlight?.flight.scheduledDeparture || ""} placeholder="8:40 PM" required /></label>
                 <label>Estimated departure<input name="estimatedDeparture" defaultValue={selectedGuestFlight?.flight.estimatedDeparture || ""} placeholder="9:10 PM" /></label>
@@ -2123,16 +2821,19 @@ export default function Home() {
           <section className="modal" onMouseDown={(e) => e.stopPropagation()}>
             <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
             <span className="eyebrow">5-DAY WEATHER FORECAST</span>
-            <h2>{dynamicWeatherForecast.destination} & Region</h2>
+            <h2>{[dynamicWeatherForecast.destination, dynamicWeatherForecast.region].filter(Boolean).join(", ")}</h2>
             <div style={{ display: "grid", gap: "10px", marginBottom: "20px" }}>
+              {currentWeatherLoading && <p>Loading the latest forecast…</p>}
+              {!currentWeatherLoading && currentWeatherError && <div className="auth-error" role="alert">{currentWeatherError}</div>}
               {dynamicWeatherForecast.days.map((w) => (
                 <div key={w.day} style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#f8fafc", borderRadius: "6px", fontSize: "10px" }}>
                   <strong>{w.day}</strong>
-                  <span>{w.icon} {w.desc} ({w.temp})</span>
+                  <span>{w.icon} {w.desc} ({w.low}–{w.high})</span>
                   <small style={{ color: "#64748b" }}>Rain {w.rain}</small>
                 </div>
               ))}
             </div>
+            {dynamicWeatherForecast.source && <small className="weather-source">Live forecast from {dynamicWeatherForecast.source}</small>}
             <button className="primary-action" onClick={() => setPlannerOpen(null)}>Close Weather</button>
           </section>
         </div>
@@ -2188,6 +2889,9 @@ export default function Home() {
             <form onSubmit={editCurrentDay}>
               <span className="eyebrow">EDIT DAY</span>
               <h2>Day {activeDay + 1} Settings</h2>
+              <label>Date
+                <input name="date" type="date" defaultValue={day.isoDate || ""} />
+              </label>
               <label>Day Title
                 <input name="label" defaultValue={day.label} required autoFocus />
               </label>
@@ -2246,14 +2950,33 @@ export default function Home() {
               <form onSubmit={createTrip}>
                 <span className="eyebrow">NEW ITINERARY</span>
                 <h2>Create any trip</h2>
-                <label>Trip name<input name="name" placeholder="e.g. Japan in spring" required autoFocus /></label>
-                <label>Route or destination<input name="route" placeholder="e.g. Tokyo → Kyoto → Osaka" required /></label>
+                <label>Trip name<input name="name" placeholder="e.g. Spring break" required autoFocus /></label>
+                <TripLocationFields />
+                <TripDateFields />
                 <div className="form-row">
-                  <label>Start date<input name="start" type="date" /></label>
                   <label>Travelers<input name="travelers" type="number" min="1" defaultValue="1" /></label>
+                  <label>First day title<input name="firstDay" placeholder="e.g. Arrival" /></label>
                 </div>
-                <label>First day title<input name="firstDay" placeholder="e.g. Arrival in Tokyo" /></label>
                 <button className="primary-action">Create itinerary</button>
+              </form>
+            )}
+
+            {plannerOpen === "trip-settings" && activeTrip && (
+              <form onSubmit={editTripDetails}>
+                <span className="eyebrow">TRIP SETTINGS</span>
+                <h2>Edit trip details</h2>
+                <label>Trip name<input name="name" defaultValue={activeTrip.name} required autoFocus /></label>
+                <TripDateFields defaultStart={activeTrip.startDate} defaultEnd={activeTrip.endDate || activeTrip.startDate} />
+                <TripLocationFields
+                  key={`${activeTrip.id}-${activeTrip.countryCode || inferredCountryCode}-${activeTrip.regionCode || activeTrip.region}-${activeTrip.city}`}
+                  defaultCountryCode={activeTrip.countryCode || inferredCountryCode}
+                  defaultCountry={activeTrip.country || tripCountry}
+                  defaultRegionCode={activeTrip.regionCode || countryByCode(activeTrip.countryCode || inferredCountryCode)?.regions.find((item) => item.name === activeTrip.region)?.code || ""}
+                  defaultRegion={activeTrip.region || tripRegion}
+                  defaultCity={activeTrip.city || tripCity}
+                  defaultCurrency={tripCurrency}
+                />
+                <button className="primary-action">Save trip details</button>
               </form>
             )}
 
@@ -2285,10 +3008,10 @@ export default function Home() {
               <form onSubmit={addExpenseSubmit}>
                 <span className="eyebrow">GROUP EXPENSE</span>
                 <h2>Add a shared cost</h2>
-                <label>Description<input name="description" defaultValue="Dinner at Kronenhalle" required autoFocus /></label>
+                <label>Description<input name="description" placeholder="e.g. Dinner reservation" required autoFocus /></label>
                 <div className="form-row">
                   <label>Amount<input name="amount" defaultValue="186.00" inputMode="decimal" required /></label>
-                  <label>Currency<select name="currency" defaultValue="CHF"><option>CHF</option><option>EUR</option><option>USD</option></select></label>
+                  <label>Currency<input name="currency" value={tripCurrency} readOnly /></label>
                 </div>
                 <label>Paid by
                   <select name="paidBy" defaultValue={travelersList[0]?.name || "Organizer"}>
@@ -2325,23 +3048,24 @@ export default function Home() {
           <section className="modal" onMouseDown={(e) => e.stopPropagation()}>
             <button className="modal-close" onClick={() => setPlannerOpen(null)}>×</button>
             <span className="eyebrow">YOUR ITINERARIES</span>
-            <h2>Switch or Manage Trips</h2>
+            <h2>Switch active trips</h2>
             <div style={{ display: "grid", gap: "10px", marginBottom: "20px", maxHeight: "280px", overflowY: "auto" }}>
-              {savedTrips.map((t) => (
+              {activeTrips.length === 0 && <p className="modal-copy">No active or upcoming trips. Open the trip dashboard to view Archived.</p>}
+              {activeTrips.map((t) => (
                 <div key={t.id} onClick={() => { setActiveTripId(t.id); setActiveDay(0); setPlannerOpen(null); notify(`Switched to "${t.name}"`); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", background: activeTripId === t.id ? "#fff7ed" : "#f8fafc", border: activeTripId === t.id ? "1.5px solid var(--coral)" : "1px solid var(--line)", borderRadius: "8px", cursor: "pointer" }}>
                   <div>
                     <strong style={{ fontSize: "13px", display: "block", color: activeTripId === t.id ? "var(--coral)" : "#0f172a" }}>{t.name} {activeTripId === t.id && "(Active)"}</strong>
                     <small style={{ fontSize: "10px", color: "#64748b" }}>{t.route} · {t.days.length} Days · {t.travelersCount} Travelers</small>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                    {savedTrips.length > 1 && (
+                    {activeTrips.length > 0 && (
                       <button
                         type="button"
-                        onClick={(e) => deleteTrip(t.id, e)}
-                        style={{ border: 0, background: "transparent", color: "#e53e3e", cursor: "pointer", fontSize: "16px", padding: "4px" }}
-                        title="Delete itinerary"
+                        onClick={(event) => { event.stopPropagation(); archiveTrip(t.id); }}
+                        style={{ border: 0, background: "transparent", color: "#64748b", cursor: "pointer", fontSize: "11px", padding: "4px" }}
+                        title="Archive itinerary"
                       >
-                        🗑
+                        Archive
                       </button>
                     )}
                     <b style={{ fontSize: "16px", color: activeTripId === t.id ? "var(--coral)" : "#cbd5e1" }}>›</b>
@@ -2390,6 +3114,10 @@ export default function Home() {
             </div>
           </section>
         </div>
+      )}
+
+      {pendingDeleteTrip && (
+        <DeleteTripDialog trip={pendingDeleteTrip} onCancel={() => setPendingDeleteTripId(null)} onConfirm={confirmPermanentDelete} />
       )}
 
       {toast && <div className="toast" role="status">✓ {toast}</div>}

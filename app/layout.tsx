@@ -48,7 +48,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: socialImage,
           width: 1680,
           height: 941,
-          alt: "JourneySync Swiss Escape trip planner",
+          alt: "JourneySync private trip library",
         },
       ],
     },

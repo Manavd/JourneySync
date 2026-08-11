@@ -28,10 +28,8 @@ test("server-renders the JourneySync travel application", async () => {
 
   const html = await response.text();
   assert.match(html, /JourneySync/i);
-  assert.match(html, /Swiss Escape/i);
-  assert.match(html, /Arrival in Zürich/i);
-  assert.match(html, /Flight Tracker/i);
-  assert.match(html, /Guest Flights/i);
+  assert.match(html, /Checking your Firebase account/i);
+  assert.doesNotMatch(html, /No trip selected/i);
 
   const assetsUrl = new URL("../dist/client/assets/", import.meta.url);
   const pageAsset = (await readdir(assetsUrl)).find((name) => /^page-.*\.js$/.test(name));
@@ -40,6 +38,73 @@ test("server-renders the JourneySync travel application", async () => {
   assert.match(pageBundle, /Live flight information/i);
   assert.match(pageBundle, /From and to airports/i);
   assert.match(pageBundle, /Flight code/i);
+  assert.match(pageBundle, /Welcome back/i);
+  assert.match(pageBundle, /Active and upcoming trips/i);
+  assert.match(pageBundle, /Nothing is prefilled or added as a demo/i);
+  assert.match(pageBundle, /Choose a state or region first/i);
+  assert.match(pageBundle, /Expenses will use/i);
+  assert.match(pageBundle, /Edit trip details/i);
+  assert.match(pageBundle, /Active and upcoming trips/i);
+  assert.match(pageBundle, /Completed trips move to Archived automatically/i);
+  assert.match(pageBundle, /Delete trip permanently/i);
+  assert.match(pageBundle, /Type DELETE to confirm/i);
+  assert.match(pageBundle, /It cannot be restored/i);
+  assert.match(pageBundle, /isoDate/i);
+  assert.match(pageBundle, /End date/i);
+  assert.match(pageBundle, /Choose an end date on or after the start date/i);
+  assert.match(pageBundle, /journeysync_trips_/i);
+  assert.doesNotMatch(pageBundle, /journeysync_all_trips/i);
+  assert.doesNotMatch(pageBundle, /journeysync_mock_user/i);
+});
+
+test("weather endpoint geocodes the selected city and returns a no-cache forecast", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      if (url.hostname === "geocoding-api.open-meteo.com") {
+        assert.equal(url.searchParams.get("countryCode"), "US");
+        assert.match(url.searchParams.get("name") ?? "", /Atlanta, Georgia/i);
+        return Response.json({
+          results: [{
+            name: "Atlanta",
+            admin1: "Georgia",
+            country: "United States",
+            country_code: "US",
+            latitude: 33.749,
+            longitude: -84.388,
+          }],
+        });
+      }
+      if (url.hostname === "api.open-meteo.com") {
+        assert.equal(url.searchParams.get("temperature_unit"), "fahrenheit");
+        assert.equal(url.searchParams.get("forecast_days"), "5");
+        return Response.json({
+          daily_units: { temperature_2m_max: "°F" },
+          daily: {
+            time: ["2026-08-10"],
+            weather_code: [0],
+            temperature_2m_max: [91.2],
+            temperature_2m_min: [73.4],
+            precipitation_probability_max: [12],
+          },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const response = await render("/api/weather?city=Atlanta&region=Georgia&country=United%20States&countryCode=US");
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("cache-control") ?? "", /no-store/i);
+    const body = await response.json();
+    assert.equal(body.destination, "Atlanta");
+    assert.equal(body.days[0].high, "91°F");
+    assert.equal(body.days[0].low, "73°F");
+    assert.equal(body.days[0].rain, "12%");
+    assert.equal(body.source, "Open-Meteo");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("live flight endpoint rejects unauthenticated requests", async () => {
@@ -57,6 +122,13 @@ test("live flight endpoint rejects unauthenticated requests", async () => {
   assert.equal(response.status, 401);
   const body = await response.json();
   assert.match(body.error, /sign in/i);
+});
+
+test("Firestore rules isolate each user's profile data", async () => {
+  const rules = await readFile(new URL("../firestore.rules", import.meta.url), "utf8");
+  assert.match(rules, /request\.auth\s*!=\s*null/);
+  assert.match(rules, /request\.auth\.uid\s*==\s*userId/);
+  assert.doesNotMatch(rules, /allow\s+(?:read|write|read,\s*write)\s*:\s*if\s+true/);
 });
 
 test("route search returns normalized AeroDataBox flight information", async () => {
