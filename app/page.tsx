@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState, useEffect, useRef } from "react";
-import { 
+import {
   auth, 
   db, 
   googleProvider, 
@@ -24,6 +24,7 @@ import {
   inferCountryCode,
   regionByCode,
 } from "./location-data";
+import TripMap from "./TripMap";
 
 type FlightInfo = {
   number: string;
@@ -108,6 +109,8 @@ type MapPin = {
   desc: string;
   temp: string;
   savedOffline?: boolean;
+  latitude?: number;
+  longitude?: number;
 };
 
 type WalletDoc = {
@@ -157,6 +160,8 @@ type WeatherForecast = {
   country: string;
   days: WeatherDay[];
   source?: string;
+  latitude?: number;
+  longitude?: number;
 };
 
 type TripCache = {
@@ -566,6 +571,13 @@ export default function Home() {
   const expenses = activeTrip?.expenses ?? EMPTY_EXPENSES;
   const walletDocs = activeTrip?.walletDocs ?? EMPTY_WALLET_DOCS;
   const mapPins = activeTrip?.mapPins ?? EMPTY_MAP_PINS;
+  const mapPoints = useMemo(() => mapPins.map((pin) => ({
+    name: pin.name,
+    code: pin.code,
+    description: pin.desc,
+    latitude: pin.latitude,
+    longitude: pin.longitude,
+  })), [mapPins]);
   const travelersList = activeTrip?.travelersList ?? EMPTY_TRAVELERS;
   const guestFlights = activeTrip?.guestFlights ?? EMPTY_GUEST_FLIGHTS;
   const inferredCountryCode = useMemo(() => {
@@ -862,6 +874,11 @@ export default function Home() {
   const weatherIsCurrent = weatherLocationKey === requestedWeatherKey;
   const currentWeatherError = !tripCity ? "Choose a city in trip details." : weatherIsCurrent ? weatherError : "";
   const currentWeatherLoading = !!tripCity && (!weatherIsCurrent || weatherLoading);
+  const mapCenter = useMemo(() => (
+    weatherIsCurrent && typeof weatherForecast?.latitude === "number" && typeof weatherForecast.longitude === "number"
+      ? { latitude: weatherForecast.latitude, longitude: weatherForecast.longitude }
+      : undefined
+  ), [weatherIsCurrent, weatherForecast?.latitude, weatherForecast?.longitude]);
   const dynamicWeatherForecast: WeatherForecast = (weatherIsCurrent ? weatherForecast : null) || {
     destination: tripCity || "Trip location",
     region: tripRegion,
@@ -1665,7 +1682,7 @@ export default function Home() {
     notify("Traveler removed from team.");
   }
 
-  function addMapPinSubmit(event: FormEvent<HTMLFormElement>) {
+  async function addMapPinSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!requireSignIn("add a map pin")) return;
     const form = new FormData(event.currentTarget);
@@ -1674,23 +1691,31 @@ export default function Home() {
     const temp = String(form.get("temp") || "18°C");
     const desc = String(form.get("desc") || "Route destination");
 
+    setLiveUpdating("map-pin");
+    let coordinates: { latitude: number; longitude: number };
+    try {
+      const location = [name, tripCity, tripRegion, tripCountry].filter(Boolean).join(", ");
+      const query = new URLSearchParams({ q: location, countryCode: inferredCountryCode });
+      const response = await fetch(`/api/geocode?${query.toString()}`, { cache: "no-store" });
+      const body = await response.json() as Partial<typeof coordinates> & { error?: string };
+      if (!response.ok || typeof body.latitude !== "number" || typeof body.longitude !== "number") {
+        throw new Error(body.error || "That place could not be located.");
+      }
+      coordinates = { latitude: body.latitude, longitude: body.longitude };
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "That place could not be located.");
+      setLiveUpdating(null);
+      return;
+    }
+
     updateActiveTrip((trip) => ({
       ...trip,
-      mapPins: [...trip.mapPins, { name, code, temp, desc }],
+      mapPins: [...trip.mapPins, { name, code, temp, desc, ...coordinates }],
     }));
     setSelectedMapPin(name);
     setPlannerOpen(null);
+    setLiveUpdating(null);
     notify(`${name} pin added to map!`);
-  }
-
-  function toggleSavePinOffline(pinName: string) {
-    if (!requireSignIn("save a pin offline")) return;
-    updateActiveTrip((trip) => ({
-      ...trip,
-      mapPins: trip.mapPins.map((p) => (p.name === pinName ? { ...p, savedOffline: !p.savedOffline } : p)),
-    }));
-    const pin = mapPins.find((p) => p.name === pinName);
-    notify(`Offline map for ${pinName} ${pin?.savedOffline ? "removed" : "downloaded and saved"}!`);
   }
 
   if (authChecking) {
@@ -2467,29 +2492,45 @@ export default function Home() {
                 <button onClick={() => openMutationPanel("map-pin")}>＋ Add Pin</button>
               </div>
 
-              <div className="map-canvas">
-                <div className="map-route-line" />
-                <div className="map-pins">
+              <TripMap
+                location={[tripCity, tripRegion, tripCountry].filter(Boolean).join(", ")}
+                countryCode={inferredCountryCode}
+                center={mapCenter}
+                points={mapPoints}
+                selectedName={selectedMapPin}
+                onSelect={setSelectedMapPin}
+              />
+
+              {mapPins.length > 0 && (
+                <div className="map-place-list" aria-label="Saved map places">
                   {mapPins.map((pin, idx) => (
-                    <div className="map-pin" key={`${pin.name}-${idx}`} onClick={() => setSelectedMapPin(pin.name)}>
-                      <div className="pin-bubble" style={{ background: selectedMapPin === pin.name ? "#ef7159" : "#17212b" }}>
-                        {pin.code}
-                      </div>
-                      <label>{pin.name}</label>
-                    </div>
+                    <button
+                      type="button"
+                      className={selectedMapPin === pin.name ? "selected" : ""}
+                      key={`${pin.name}-${idx}`}
+                      onClick={() => setSelectedMapPin(pin.name)}
+                    >
+                      <span>{pin.code}</span>{pin.name}
+                    </button>
                   ))}
                 </div>
-              </div>
+              )}
 
               <div style={{ marginTop: "24px", background: "white", padding: "20px", borderRadius: "10px", border: "1px solid var(--line)" }}>
-                <h3 style={{ margin: "0 0 8px", fontFamily: "Georgia, serif" }}>Destination Focus: {selectedMapPin}</h3>
+                <h3 style={{ margin: "0 0 8px", fontFamily: "Georgia, serif" }}>Destination Focus: {selectedMapPin || tripCity}</h3>
                 <p style={{ margin: "0 0 14px", fontSize: "11px", color: "#64748b" }}>
-                  {mapPins.find((p) => p.name === selectedMapPin)?.desc || `Explore highlights, activities, and dining in ${selectedMapPin}.`}
+                  {mapPins.find((p) => p.name === selectedMapPin)?.desc || `Explore highlights, activities, and dining in ${tripCity}.`}
                 </p>
                 <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                  <button className="primary-action" style={{ width: "auto", padding: "8px 16px" }} onClick={() => toggleSavePinOffline(selectedMapPin)}>
-                    {mapPins.find((p) => p.name === selectedMapPin)?.savedOffline ? "✓ Saved Offline" : "Save Map Offline"}
-                  </button>
+                  <a
+                    className="primary-action"
+                    style={{ width: "auto", padding: "8px 16px", textDecoration: "none" }}
+                    href={`https://www.openstreetmap.org/search?query=${encodeURIComponent([selectedMapPin || tripCity, tripRegion, tripCountry].filter(Boolean).join(", "))}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open in OpenStreetMap
+                  </a>
                   <button className="secondary-action" style={{ width: "auto", margin: 0, padding: "8px 16px" }} onClick={() => setActiveNav("Itinerary")}>View Day Plans</button>
                 </div>
               </div>
@@ -3092,7 +3133,9 @@ export default function Home() {
                 <label>Expected Temp<input name="temp" defaultValue="18°C" required /></label>
               </div>
               <label>Description<input name="desc" placeholder="e.g. Chapel Bridge & Old Town" required /></label>
-              <button className="primary-action">Add Pin to Map</button>
+              <button className="primary-action" disabled={liveUpdating === "map-pin"}>
+                {liveUpdating === "map-pin" ? "Finding place…" : "Add Pin to Map"}
+              </button>
             </form>
           </section>
         </div>

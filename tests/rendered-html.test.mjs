@@ -51,10 +51,43 @@ test("server-renders the JourneySync travel application", async () => {
   assert.match(pageBundle, /It cannot be restored/i);
   assert.match(pageBundle, /isoDate/i);
   assert.match(pageBundle, /End date/i);
+  assert.match(pageBundle, /OpenStreetMap/i);
+  assert.match(pageBundle, /Interactive map of/i);
+  assert.match(pageBundle, /Finding place/i);
   assert.match(pageBundle, /Choose an end date on or after the start date/i);
   assert.match(pageBundle, /journeysync_trips_/i);
   assert.doesNotMatch(pageBundle, /journeysync_all_trips/i);
   assert.doesNotMatch(pageBundle, /journeysync_mock_user/i);
+});
+
+test("map geocoding resolves saved places without caching", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      assert.equal(url.hostname, "nominatim.openstreetmap.org");
+      assert.equal(url.searchParams.get("countrycodes"), "us");
+      assert.match(url.searchParams.get("q") ?? "", /Millennium Park, Chicago/i);
+      return Response.json([{
+          name: "Millennium Park",
+          display_name: "Millennium Park, Chicago, Illinois, United States",
+          lat: "41.8826",
+          lon: "-87.6226",
+          address: { state: "Illinois", country: "United States", country_code: "us" },
+      }]);
+    };
+
+    const response = await render("/api/geocode?q=Millennium%20Park%2C%20Chicago&countryCode=US");
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("cache-control") ?? "", /no-store/i);
+    assert.match(response.headers.get("cache-control") ?? "", /no-cache/i);
+    const body = await response.json();
+    assert.equal(body.name, "Millennium Park");
+    assert.equal(body.latitude, 41.8826);
+    assert.equal(body.longitude, -87.6226);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("release endpoint is never cached and reports the deployed build", async () => {
