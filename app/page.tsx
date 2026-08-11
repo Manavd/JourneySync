@@ -535,6 +535,12 @@ export default function Home() {
     }
   }, [user, cloudReady, savedTrips, activeTripId]);
 
+  useEffect(() => {
+    if (activeDay >= itineraryDays.length && itineraryDays.length > 0) {
+      setActiveDay(0);
+    }
+  }, [activeDay, itineraryDays.length]);
+
   const day = useMemo(() => itineraryDays[activeDay] || itineraryDays[0] || { date: "12", short: "SAT", label: "Day 1", events: [] }, [activeDay, itineraryDays]);
 
   const totalExpenseAmount = useMemo(() => {
@@ -873,7 +879,7 @@ export default function Home() {
           ? {
               ...d,
               events: d.events.map((ev) =>
-                ev.id === selectedEvent.id || (ev.title === selectedEvent.title && ev.time === selectedEvent.time)
+                ((selectedEvent.id && ev.id === selectedEvent.id) || (ev.title === selectedEvent.title && ev.time === selectedEvent.time))
                   ? updated
                   : ev
               ),
@@ -1155,7 +1161,7 @@ export default function Home() {
           ? {
               ...d,
               events: d.events.filter(
-                (ev) => !(ev.id === selectedEvent.id || (ev.title === selectedEvent.title && ev.time === selectedEvent.time))
+                (ev) => !((selectedEvent.id && ev.id === selectedEvent.id) || (ev.title === selectedEvent.title && ev.time === selectedEvent.time))
               ),
             }
           : d
@@ -1171,12 +1177,15 @@ export default function Home() {
     event.preventDefault();
     if (!requireSignIn("add an expense")) return;
     const form = new FormData(event.currentTarget);
+    const rawAmount = String(form.get("amount") || "0").replace(",", ".");
+    const parsedAmount = parseFloat(rawAmount);
+    const amount = Number.isNaN(parsedAmount) ? 0 : parsedAmount;
     const newExp: Expense = {
       id: "exp-" + Date.now(),
       description: String(form.get("description") || "Expense"),
-      amount: Number(form.get("amount") || 0),
+      amount,
       currency: String(form.get("currency") || "CHF"),
-      paidBy: String(form.get("paidBy") || "Manav"),
+      paidBy: String(form.get("paidBy") || travelersList[0]?.name || "Organizer"),
       date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
       category: String(form.get("category") || "General"),
     };
@@ -1185,7 +1194,7 @@ export default function Home() {
       expenses: [newExp, ...trip.expenses],
     }));
     setPlannerOpen(null);
-    notify(`Expense added: ${newExp.currency} ${newExp.amount}`);
+    notify(`Expense added: ${newExp.currency} ${newExp.amount.toFixed(2)}`);
   }
 
   function deleteExpense(id: string) {
@@ -1344,7 +1353,7 @@ export default function Home() {
         <div className="sidebar-bottom">
           <button className="download-card" onClick={() => {
             setSynced(!synced);
-            localStorage.setItem("journeysync_trip", JSON.stringify({ tripName, tripRoute, itineraryDays }));
+            localStorage.setItem("journeysync_all_trips", JSON.stringify({ savedTrips, activeTripId }));
             notify(synced ? "Offline cache refreshed" : "Trip saved for offline access");
           }}>
             <span className="download-icon">↓</span>
@@ -1877,8 +1886,8 @@ export default function Home() {
               <div className="map-canvas">
                 <div className="map-route-line" />
                 <div className="map-pins">
-                  {mapPins.map((pin) => (
-                    <div className="map-pin" key={pin.name} onClick={() => setSelectedMapPin(pin.name)}>
+                  {mapPins.map((pin, idx) => (
+                    <div className="map-pin" key={`${pin.name}-${idx}`} onClick={() => setSelectedMapPin(pin.name)}>
                       <div className="pin-bubble" style={{ background: selectedMapPin === pin.name ? "#ef7159" : "#17212b" }}>
                         {pin.code}
                       </div>
@@ -2395,9 +2404,15 @@ export default function Home() {
                   <label>Amount<input name="amount" defaultValue="186.00" inputMode="decimal" required /></label>
                   <label>Currency<select name="currency" defaultValue="CHF"><option>CHF</option><option>EUR</option><option>USD</option></select></label>
                 </div>
-                <label>Paid by<select name="paidBy" defaultValue="Manav"><option>Manav</option><option>Amelia</option><option>Noah</option><option>Riya</option></select></label>
+                <label>Paid by
+                  <select name="paidBy" defaultValue={travelersList[0]?.name || "Organizer"}>
+                    {travelersList.map((t) => (
+                      <option key={t.email || t.name} value={t.name}>{t.name}</option>
+                    ))}
+                  </select>
+                </label>
                 <label>Category<select name="category" defaultValue="Dining"><option>Dining</option><option>Transport</option><option>Activities</option><option>Lodging</option></select></label>
-                <button className="primary-action">Split between 4 travelers</button>
+                <button className="primary-action">Split between {travelersList.length} traveler{travelersList.length === 1 ? "" : "s"}</button>
               </form>
             )}
 
