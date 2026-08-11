@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState, useEffect } from "react";
+import { FormEvent, useMemo, useState, useEffect, useRef } from "react";
 import { 
   auth, 
   db, 
@@ -124,194 +124,57 @@ type Trip = {
   guestFlights?: GuestFlight[];
 };
 
-const initialDays: Day[] = [
-  {
-    id: "day-1",
-    date: "12",
-    short: "SAT",
-    label: "Arrival in Zürich",
-    events: [
-      {
-        id: "ev-1",
-        time: "8:40 AM",
-        title: "Arrive at Zürich Airport",
-        meta: "LX 017 · Terminal 2 · Gate E52",
-        kind: "flight",
-        status: "On time",
-        flight: {
-          number: "LX 017",
-          airline: "SWISS",
-          origin: "JFK",
-          destination: "ZRH",
-          departureDate: "2026-09-12",
-          departureTerminal: "1",
-          arrivalTerminal: "2",
-          gate: "E52",
-          scheduledDeparture: "8:40 PM",
-          estimatedDeparture: "8:40 PM",
-          scheduledArrival: "10:15 AM (+1)",
-          estimatedArrival: "10:15 AM (+1)",
-          delayMinutes: 0,
-          baggageClaim: "Carousel 24",
-          lastUpdated: "Just now",
-        },
-      },
-      {
-        id: "ev-2",
-        time: "10:18 AM",
-        title: "Train to Zürich HB",
-        meta: "SBB · Platform 3 · 12 min",
-        kind: "train",
-      },
-      {
-        id: "ev-3",
-        time: "11:00 AM",
-        title: "Check in at Marktgasse Hotel",
-        meta: "Niederdorf · Reservation JS-4821",
-        kind: "stay",
-      },
-      {
-        id: "ev-4",
-        time: "7:30 PM",
-        title: "Dinner at Kronenhalle",
-        meta: "Rämistrasse 4 · Table for 4",
-        kind: "food",
-      },
-    ],
-  },
-  {
-    id: "day-2",
-    date: "13",
-    short: "SUN",
-    label: "Old Town & Lake Zürich",
-    events: [
-      {
-        id: "ev-5",
-        time: "9:30 AM",
-        title: "Coffee at MAME",
-        meta: "Josefstrasse 160 · 12 min walk",
-        kind: "food",
-      },
-      {
-        id: "ev-6",
-        time: "11:00 AM",
-        title: "Old Town walking route",
-        meta: "Lindenhof → Grossmünster · 3.2 km",
-        kind: "activity",
-      },
-      {
-        id: "ev-7",
-        time: "2:15 PM",
-        title: "Lake Zürich cruise",
-        meta: "Bürkliplatz pier · Boarding 2:00 PM",
-        kind: "activity",
-      },
-    ],
-  },
-  {
-    id: "day-3",
-    date: "14",
-    short: "MON",
-    label: "Onward to Interlaken",
-    events: [
-      {
-        id: "ev-8",
-        time: "8:02 AM",
-        title: "Zürich HB to Interlaken Ost",
-        meta: "IC 81 · Platform 31 · 1 change",
-        kind: "train",
-        status: "Platform 31",
-      },
-      {
-        id: "ev-9",
-        time: "11:30 AM",
-        title: "Drop bags at Hotel Interlaken",
-        meta: "Höheweg 74 · Room ready after 2 PM",
-        kind: "stay",
-      },
-      {
-        id: "ev-10",
-        time: "3:00 PM",
-        title: "Harder Kulm funicular",
-        meta: "Return ticket saved in Wallet",
-        kind: "activity",
-      },
-    ],
-  },
-  {
-    id: "day-4",
-    date: "15",
-    short: "TUE",
-    label: "Lauterbrunnen Valley",
-    events: [
-      {
-        id: "ev-11",
-        time: "8:35 AM",
-        title: "Train to Lauterbrunnen",
-        meta: "Platform 2B · 22 min",
-        kind: "train",
-      },
-      {
-        id: "ev-12",
-        time: "10:00 AM",
-        title: "Staubbach Falls trail",
-        meta: "Pinned offline · Easy · 4.8 km",
-        kind: "activity",
-      },
-      {
-        id: "ev-13",
-        time: "1:00 PM",
-        title: "Lunch at Airtime Café",
-        meta: "Shared list · 4 votes",
-        kind: "food",
-      },
-    ],
-  },
-];
-
-const initialExpenses: Expense[] = [
-  { id: "exp-1", description: "Dinner at Kronenhalle", amount: 186.00, currency: "CHF", paidBy: "Manav", date: "Sep 12", category: "Dining" },
-  { id: "exp-2", description: "Zürich HB Train Passes", amount: 42.40, currency: "CHF", paidBy: "Amelia", date: "Sep 12", category: "Transport" },
-  { id: "exp-3", description: "Harder Kulm Funicular Tickets", amount: 120.20, currency: "CHF", paidBy: "Manav", date: "Sep 14", category: "Activities" },
-  { id: "exp-4", description: "Coffee & Pastries at MAME", amount: 80.00, currency: "CHF", paidBy: "Noah", date: "Sep 13", category: "Dining" }
-];
-
-const initialWalletDocs: WalletDoc[] = [
-  { id: "w-1", title: "Boarding pass", meta: "SWISS LX 017 · PDF", code: "LX-98421-ZRH", icon: "LX" },
-  { id: "w-2", title: "Hotel confirmation", meta: "Marktgasse · PDF", code: "HTL-ZH-4821", icon: "M", coralIcon: true },
-  { id: "w-3", title: "Harder Kulm Pass", meta: "Funicular Return · Mobile Ticket", code: "HK-PASS-991", icon: "HK" },
-  { id: "w-4", title: "Swiss Travel Pass", meta: "8 Consecutive Days", code: "STP-2026-884", icon: "STP", coralIcon: true },
-  { id: "w-5", title: "Travel Insurance", meta: "Allianz Global · Policy PDF", code: "AZ-981245-A", icon: "AZ" },
-  { id: "w-6", title: "Interlaken Hotel", meta: "Höheweg 74 · Conf #4091", code: "INT-HOTEL-4091", icon: "IH" }
-];
-
-const initialTravelers: Traveler[] = [
-  { name: "Manav S.", role: "Trip organizer", email: "manav@example.com", avatar: "MS", bg: "avatar-me" },
-  { name: "Amelia L.", role: "Co-organizer", email: "amelia@example.com", avatar: "AL", bg: "peach" },
-  { name: "Noah K.", role: "Traveler", email: "noah@example.com", avatar: "NK", bg: "blue" },
-  { name: "Riya P.", role: "Traveler", email: "riya@example.com", avatar: "RP", bg: "green" },
-];
-
-const initialMapPins: MapPin[] = [
-  { name: "Zürich", code: "ZRH", desc: "Arrival & Old Town", temp: "18°C" },
-  { name: "Interlaken", code: "INT", desc: "Alpine Lakes & Funicular", temp: "16°C" },
-  { name: "Lauterbrunnen", code: "LTB", desc: "Waterfalls & Valley Trail", temp: "15°C" },
-  { name: "Zermatt", code: "ZMT", desc: "Matterhorn Peak", temp: "12°C" },
-];
-
-const initialTrip: Trip = {
-  id: "swiss-escape",
-  name: "Swiss Escape",
-  route: "Zürich → Interlaken → Zermatt",
-  startDate: "2026-09-12",
-  travelersCount: 4,
-  days: initialDays,
-  expenses: initialExpenses,
-  walletDocs: initialWalletDocs,
-  mapPins: initialMapPins,
-  travelersList: initialTravelers,
-  guestFlights: [],
+type TripCache = {
+  savedTrips: Trip[];
+  activeTripId: string;
 };
+
+function localTripsKey(uid: string) {
+  return `journeysync_trips_${uid}`;
+}
+
+function readLocalTrips(uid: string): TripCache | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const cached = localStorage.getItem(localTripsKey(uid));
+    if (!cached) return null;
+    const parsed = JSON.parse(cached) as Partial<TripCache>;
+    if (parsed && Array.isArray(parsed.savedTrips)) {
+      return {
+        savedTrips: parsed.savedTrips,
+        activeTripId: typeof parsed.activeTripId === "string" ? parsed.activeTripId : "",
+      };
+    }
+  } catch { /* ignore corrupt cache */ }
+  return null;
+}
+
+function writeLocalTrips(uid: string, cache: TripCache) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(localTripsKey(uid), JSON.stringify(cache));
+  } catch { /* ignore quota errors */ }
+}
+
+function clearLocalTrips(uid: string) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(localTripsKey(uid));
+  } catch { /* ignore */ }
+}
+
+function normalizeTripCache(savedTrips: Trip[], activeTripId: string): TripCache {
+  const validActive = savedTrips.some((trip) => trip.id === activeTripId)
+    ? activeTripId
+    : (savedTrips[0]?.id ?? "");
+  return { savedTrips, activeTripId: validActive };
+}
+
+function tripsFromCloud(data: Record<string, unknown> | undefined): TripCache {
+  const savedTrips = data && Array.isArray(data.savedTrips) ? (data.savedTrips as Trip[]) : [];
+  const activeTripId = data && typeof data.activeTripId === "string" ? data.activeTripId : "";
+  return normalizeTripCache(savedTrips, activeTripId);
+}
 
 const iconFor = {
   flight: "✈",
@@ -395,54 +258,37 @@ export default function Home() {
   const [cloudReady, setCloudReady] = useState(false);
   const [authError, setAuthError] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [offlineCachedAt, setOfflineCachedAt] = useState<string | null>(null);
+
+  const activeUidRef = useRef<string | null>(null);
+  const cloudHydratedRef = useRef(false);
 
   // App Data State - Multi-Trip Architecture
-  const [savedTrips, setSavedTrips] = useState<Trip[]>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const cached = localStorage.getItem("journeysync_all_trips");
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed && Array.isArray(parsed.savedTrips) && parsed.savedTrips.length > 0) {
-            return parsed.savedTrips;
-          }
-        }
-      } catch { /* ignore */ }
-    }
-    return [initialTrip];
-  });
-  const [activeTripId, setActiveTripId] = useState<string>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const cached = localStorage.getItem("journeysync_all_trips");
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed && parsed.activeTripId) return parsed.activeTripId;
-        }
-      } catch { /* ignore */ }
-    }
-    return "swiss-escape";
-  });
+  const [savedTrips, setSavedTrips] = useState<Trip[]>([]);
+  const [activeTripId, setActiveTripId] = useState("");
+  const [cloudHydrated, setCloudHydrated] = useState(false);
 
   const activeTrip = useMemo(() => {
-    return savedTrips.find((t) => t.id === activeTripId) || savedTrips[0] || initialTrip;
+    if (savedTrips.length === 0) return null;
+    return savedTrips.find((t) => t.id === activeTripId) || savedTrips[0] || null;
   }, [savedTrips, activeTripId]);
 
-  const {
-    name: tripName,
-    route: tripRoute,
-    travelersCount: tripTravelers,
-    days: itineraryDays,
-    expenses,
-    walletDocs,
-    mapPins,
-    travelersList,
-  } = activeTrip;
-  const guestFlights = activeTrip.guestFlights || [];
+  const hasActiveTrip = activeTrip !== null;
+
+  const tripName = activeTrip?.name ?? "No trip selected";
+  const tripRoute = activeTrip?.route ?? "";
+  const tripTravelers = activeTrip?.travelersCount ?? 0;
+  const itineraryDays = activeTrip?.days ?? [];
+  const expenses = activeTrip?.expenses ?? [];
+  const walletDocs = activeTrip?.walletDocs ?? [];
+  const mapPins = activeTrip?.mapPins ?? [];
+  const travelersList = activeTrip?.travelersList ?? [];
+  const guestFlights = activeTrip?.guestFlights ?? [];
 
   const [activeDay, setActiveDay] = useState(0);
 
   function updateActiveTrip(updater: (currentTrip: Trip) => Trip) {
+    if (!activeTrip) return;
     setSavedTrips((prevTrips) =>
       prevTrips.map((trip) => {
         if (trip.id === activeTrip.id) {
@@ -466,7 +312,7 @@ export default function Home() {
   const [flightSearchBusy, setFlightSearchBusy] = useState(false);
   const [flightSearchError, setFlightSearchError] = useState("");
   const [dayDropdownOpen, setDayDropdownOpen] = useState(false);
-  const [selectedMapPin, setSelectedMapPin] = useState<string>(() => mapPins[0]?.name || "Zürich");
+  const [selectedMapPin, setSelectedMapPin] = useState<string>("");
 
   // Auth Listener & Firestore Sync
   useEffect(() => {
@@ -474,33 +320,54 @@ export default function Home() {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       unsubscribeCloud();
       unsubscribeCloud = () => {};
+
+      const previousUid = activeUidRef.current;
+      const nextUid = currentUser?.uid ?? null;
+      activeUidRef.current = nextUid;
+
+      cloudHydratedRef.current = false;
+      setCloudHydrated(false);
       setCloudReady(false);
+      setSynced(true);
+      setOfflineCachedAt(null);
       setUser(currentUser);
       setAuthChecking(false);
-      if (currentUser) {
-        setAuthError("");
-        notify(`Welcome back, ${currentUser.displayName || currentUser.email}`);
-        const docRef = doc(db, "users", currentUser.uid, "user_trips", "all_trips");
-        unsubscribeCloud = onSnapshot(docRef, (snap) => {
-          if (snap.exists()) {
-            const data = snap.data() as Record<string, any> | undefined;
-            if (data && data.savedTrips && Array.isArray(data.savedTrips) && data.savedTrips.length > 0) {
-              const incomingTrips = data.savedTrips as Trip[];
-              setSavedTrips((current) => JSON.stringify(current) === JSON.stringify(incomingTrips) ? current : incomingTrips);
-              if (data.activeTripId) setActiveTripId(data.activeTripId as string);
-            }
-          }
-          setCloudReady(true);
-          setSynced(true);
-        }, (error) => {
-          console.error("Could not load Firestore trip data:", error);
-          setSynced(false);
-          notify("Cloud data could not load. Your local copy is still available.");
-          setCloudReady(true);
-        });
-      } else {
-        setCloudReady(false);
+
+      if (previousUid && previousUid !== nextUid) {
+        clearLocalTrips(previousUid);
       }
+
+      if (!currentUser) {
+        setSavedTrips([]);
+        setActiveTripId("");
+        setActiveDay(0);
+        return;
+      }
+
+      setAuthError("");
+      setSavedTrips([]);
+      setActiveTripId("");
+
+      const docRef = doc(db, "users", currentUser.uid, "user_trips", "all_trips");
+      unsubscribeCloud = onSnapshot(docRef, (snap) => {
+        const cloud = tripsFromCloud(snap.exists() ? (snap.data() as Record<string, unknown>) : undefined);
+        setSavedTrips(cloud.savedTrips);
+        setActiveTripId(cloud.activeTripId);
+        setActiveDay(0);
+        writeLocalTrips(currentUser.uid, cloud);
+        cloudHydratedRef.current = true;
+        setCloudHydrated(true);
+        setCloudReady(true);
+        setSynced(true);
+        setOfflineCachedAt(null);
+      }, (error) => {
+        console.error("Could not load Firestore trip data:", error);
+        setSynced(false);
+        setCloudHydrated(false);
+        cloudHydratedRef.current = false;
+        setCloudReady(false);
+        notify("Cloud data could not load. Sign in again or check your connection.");
+      });
     });
     return () => {
       unsubscribeCloud();
@@ -508,32 +375,30 @@ export default function Home() {
     };
   }, []);
 
-  // Sync to Firestore and LocalStorage whenever data changes
+  // Sync to Firestore and per-user LocalStorage whenever signed-in data changes
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    if (!user || !cloudHydrated) return;
+
+    const cache = normalizeTripCache(savedTrips, activeTripId);
+    writeLocalTrips(user.uid, cache);
+
+    const syncData = async () => {
+      setSynced(false);
       try {
-        localStorage.setItem("journeysync_all_trips", JSON.stringify({ savedTrips, activeTripId }));
-      } catch { /* ignore */ }
-    }
-    if (user && cloudReady) {
-      const syncData = async () => {
+        const docRef = doc(db, "users", user.uid, "user_trips", "all_trips");
+        await setDoc(docRef, {
+          savedTrips: cache.savedTrips,
+          activeTripId: cache.activeTripId,
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+        setSynced(true);
+      } catch (e) {
+        console.error("Firestore sync error:", e);
         setSynced(false);
-        try {
-          const docRef = doc(db, "users", user.uid, "user_trips", "all_trips");
-          await setDoc(docRef, {
-            savedTrips,
-            activeTripId,
-            updatedAt: new Date().toISOString()
-          }, { merge: true });
-          setSynced(true);
-        } catch (e) {
-          console.error("Firestore sync error:", e);
-          setSynced(false);
-        }
-      };
-      syncData();
-    }
-  }, [user, cloudReady, savedTrips, activeTripId]);
+      }
+    };
+    void syncData();
+  }, [user, cloudHydrated, savedTrips, activeTripId]);
 
   useEffect(() => {
     if (activeDay >= itineraryDays.length && itineraryDays.length > 0) {
@@ -565,7 +430,7 @@ export default function Home() {
 
   // Compute trip date range from itinerary data and start date
   const tripDateRange = useMemo(() => {
-    const startObj = new Date(activeTrip.startDate ? `${activeTrip.startDate}T12:00:00` : Date.now());
+    const startObj = new Date(activeTrip?.startDate ? `${activeTrip.startDate}T12:00:00` : Date.now());
     const monthStr = new Intl.DateTimeFormat("en-US", { month: "long" }).format(startObj).toUpperCase();
     const yearStr = String(startObj.getFullYear() || 2026);
     if (itineraryDays.length === 0) return { startDate: "01", endDate: "01", month: monthStr, year: yearStr };
@@ -577,11 +442,11 @@ export default function Home() {
       month: monthStr,
       year: yearStr,
     };
-  }, [itineraryDays, activeTrip.startDate]);
+  }, [itineraryDays, activeTrip?.startDate]);
 
   // Compute dynamic weather forecast for the trip
   const dynamicWeatherForecast = useMemo(() => {
-    const startObj = new Date(activeTrip.startDate ? `${activeTrip.startDate}T12:00:00` : Date.now());
+    const startObj = new Date(activeTrip?.startDate ? `${activeTrip.startDate}T12:00:00` : Date.now());
     const dest = mapPins[0]?.name || tripName.split(" ")[0] || "Destination";
     const conditions = [
       { desc: "Partly Cloudy", icon: "☁", rain: "10%", offsetTemp: 0 },
@@ -607,7 +472,7 @@ export default function Home() {
         };
       })
     };
-  }, [activeTrip.startDate, mapPins, tripName]);
+  }, [activeTrip?.startDate, mapPins, tripName]);
 
   // Compute arrival transport / flight banner from itinerary or wallet
   const mainArrivalEvent = useMemo(() => {
@@ -676,6 +541,8 @@ export default function Home() {
         await createUserWithEmailAndPassword(auth, authEmail, authPassword);
       }
       setAuthPassword("");
+      setAuthModalOpen(false);
+      notify("Signed in successfully");
     } catch (err) {
       setAuthError(friendlyAuthError(err));
     } finally {
@@ -688,6 +555,8 @@ export default function Home() {
     setAuthLoading(true);
     try {
       await signInWithPopup(auth, googleProvider);
+      setAuthModalOpen(false);
+      notify("Signed in with Google");
     } catch (err) {
       setAuthError(friendlyAuthError(err));
     } finally {
@@ -701,6 +570,10 @@ export default function Home() {
     try {
       await signOut(auth);
       setAuthPassword("");
+      setAuthModalOpen(false);
+      setSavedTrips([]);
+      setActiveTripId("");
+      setActiveDay(0);
       notify("Logged out successfully");
     } catch (err) {
       setAuthError(friendlyAuthError(err));
@@ -737,10 +610,10 @@ export default function Home() {
     }));
 
     const defaultOrganizer: Traveler = {
-      name: user ? (user.displayName || user.email?.split("@")[0] || "Organizer") : "Manav S.",
+      name: user.displayName || user.email?.split("@")[0] || "Organizer",
       role: "Trip organizer",
-      email: user ? (user.email || "organizer@example.com") : "manav@example.com",
-      avatar: (user ? (user.displayName || user.email || "MS") : "MS").slice(0, 2).toUpperCase(),
+      email: user.email || "organizer@example.com",
+      avatar: (user.displayName || user.email || "OR").slice(0, 2).toUpperCase(),
       bg: "avatar-me",
     };
     const newTravelers: Traveler[] = [defaultOrganizer];
@@ -779,15 +652,11 @@ export default function Home() {
   function deleteTrip(id: string, event: React.MouseEvent) {
     event.stopPropagation();
     if (!requireSignIn("delete a trip")) return;
-    if (savedTrips.length <= 1) {
-      notify("You must keep at least one itinerary!");
-      return;
-    }
     const target = savedTrips.find((t) => t.id === id);
     const newTrips = savedTrips.filter((t) => t.id !== id);
     setSavedTrips(newTrips);
-    if (activeTripId === id && newTrips.length > 0) {
-      setActiveTripId(newTrips[0].id);
+    if (activeTripId === id) {
+      setActiveTripId(newTrips[0]?.id ?? "");
       setActiveDay(0);
     }
     notify(`Itinerary "${target?.name || "Trip"}" deleted.`);
@@ -918,6 +787,7 @@ export default function Home() {
       delayMinutes: Math.max(0, Number(form.get("delayMinutes") || 0)),
       baggageClaim: String(form.get("baggageClaim") || "TBD"),
       lastUpdated: "Just now",
+      lastUpdatedUtc: new Date().toISOString(),
     };
     const status = String(form.get("status") || "Scheduled");
     updateActiveTrip((trip) => ({
@@ -1358,16 +1228,26 @@ export default function Home() {
 
         <div className="sidebar-bottom">
           <button className="download-card" onClick={() => {
-            setSynced(!synced);
-            localStorage.setItem("journeysync_all_trips", JSON.stringify({ savedTrips, activeTripId }));
-            notify(synced ? "Offline cache refreshed" : "Trip saved for offline access");
+            if (!user) {
+              setAuthError("");
+              setAuthModalOpen(true);
+              notify("Sign in to save trips offline");
+              return;
+            }
+            if (!hasActiveTrip) {
+              notify("Create a trip before saving offline");
+              return;
+            }
+            writeLocalTrips(user.uid, normalizeTripCache(savedTrips, activeTripId));
+            setOfflineCachedAt(new Date().toISOString());
+            notify("Offline cache refreshed");
           }}>
             <span className="download-icon">↓</span>
             <span>
-              <strong>{synced ? "Available offline" : "Save for offline"}</strong>
-              <small>{synced ? "Updated just now" : "Download trip"}</small>
+              <strong>{offlineCachedAt ? "Available offline" : "Save for offline"}</strong>
+              <small>{offlineCachedAt ? "Updated just now" : "Cache this device"}</small>
             </span>
-            <i>✓</i>
+            <i>{offlineCachedAt ? "✓" : ""}</i>
           </button>
 
           <button
@@ -1379,12 +1259,12 @@ export default function Home() {
             aria-label={user ? `Open account: signed in as ${user.email || user.displayName || "JourneySync user"}` : "Open account: sign in to JourneySync"}
           >
             <span className="profile-avatar-wrap">
-              <span className="avatar avatar-me">{user ? (user.displayName ? user.displayName.slice(0, 2).toUpperCase() : user.email?.slice(0, 2).toUpperCase()) : "MS"}</span>
+              <span className="avatar avatar-me">{user ? (user.displayName ? user.displayName.slice(0, 2).toUpperCase() : user.email?.slice(0, 2).toUpperCase()) : "G"}</span>
               <i aria-hidden="true" />
             </span>
             <span>
-              <strong>{user ? (user.displayName || user.email?.split("@")[0]) : "Manav S. (Guest)"}</strong>
-              <small>{authChecking ? "Checking account…" : user ? (!cloudReady ? "Signed in · Loading cloud trips" : synced ? "Signed in · Cloud synced" : "Signed in · Sync paused") : "Click to sign in & sync"}</small>
+              <strong>{user ? (user.displayName || user.email?.split("@")[0]) : "Guest"}</strong>
+              <small>{authChecking ? "Checking account…" : user ? (!cloudHydrated ? "Signed in · Loading your trips" : synced ? "Signed in · Cloud synced" : "Signed in · Sync paused") : "Sign in to view your trips"}</small>
             </span>
             <span>•••</span>
           </button>
