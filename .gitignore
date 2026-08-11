@@ -33,6 +33,7 @@ yarn-error.log*
 dev.log
 dev.*.log
 .npm-cache/
+firebase-debug.log
 
 # env files (can opt-in for committing if needed)
 .env*
