@@ -556,8 +556,8 @@ export default function Home() {
     const unsettled = expenses.filter(e => !e.settled);
     const perPerson = activeUnsettledAmount / Math.max(travelersList.length, 1);
     return travelersList.map((t) => {
-      const paid = unsettled.filter(e => e.paidBy.toLowerCase().startsWith(t.name.split(" ")[0].toLowerCase())).reduce((a, b) => a + b.amount, 0);
-      const totalPaidEver = expenses.filter(e => e.paidBy.toLowerCase().startsWith(t.name.split(" ")[0].toLowerCase())).reduce((a, b) => a + b.amount, 0);
+      const paid = unsettled.filter(e => e.paidBy === t.name).reduce((a, b) => a + b.amount, 0);
+      const totalPaidEver = expenses.filter(e => e.paidBy === t.name).reduce((a, b) => a + b.amount, 0);
       const balance = paid - perPerson;
       return { ...t, paid: totalPaidEver, balance };
     });
@@ -595,7 +595,8 @@ export default function Home() {
     return {
       destination: dest,
       days: conditions.map((c, i) => {
-        const d = new Date(startObj.getTime() + i * 86400000);
+        const d = new Date(startObj);
+        d.setDate(d.getDate() + i);
         const dayStr = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" }).format(d);
         return {
           day: dayStr,
@@ -720,7 +721,7 @@ export default function Home() {
     const date = start ? new Date(`${start}T12:00:00`) : new Date();
 
     const firstDay: Day = {
-      id: "day-" + Date.now(),
+      id: "day-" + crypto.randomUUID(),
       date: String(date.getDate()).padStart(2, "0"),
       short: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date).toUpperCase(),
       label: String(form.get("firstDay") || "Arrival"),
@@ -754,7 +755,7 @@ export default function Home() {
     }
 
     const newTripObj: Trip = {
-      id: "trip-" + Date.now(),
+      id: "trip-" + crypto.randomUUID(),
       name,
       route,
       startDate: start || date.toISOString().slice(0, 10),
@@ -797,9 +798,13 @@ export default function Home() {
     if (!requireSignIn("add a day")) return;
     const form = new FormData(event.currentTarget);
     const entered = String(form.get("date") || "");
-    const date = entered ? new Date(`${entered}T12:00:00`) : new Date(Date.now() + itineraryDays.length * 86400000);
+    const date = entered ? new Date(`${entered}T12:00:00`) : (() => {
+      const d = new Date();
+      d.setDate(d.getDate() + itineraryDays.length);
+      return d;
+    })();
     const newDay: Day = {
-      id: "day-" + Date.now(),
+      id: "day-" + crypto.randomUUID(),
       date: String(date.getDate()).padStart(2, "0"),
       short: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date).toUpperCase(),
       label: String(form.get("label") || "New Day"),
@@ -845,7 +850,7 @@ export default function Home() {
     const form = new FormData(event.currentTarget);
     const rawTime = String(form.get("time") || "");
     const item: DayEvent = {
-      id: "ev-" + Date.now(),
+      id: "ev-" + crypto.randomUUID(),
       time: rawTime ? formatTime(rawTime) : "12:00 PM",
       title: String(form.get("title") || "Untitled activity"),
       meta: String(form.get("details") || "No details provided"),
@@ -990,7 +995,7 @@ export default function Home() {
     if (!requireSignIn("add a live flight to your tracker")) return;
     const details = result.flight;
     const newFlight: DayEvent = {
-      id: `flight-${Date.now()}`,
+      id: `flight-${crypto.randomUUID()}`,
       time: details.estimatedDeparture,
       title: `${details.airline} ${details.number}`,
       meta: `${details.origin} → ${details.destination} · Gate ${details.gate}`,
@@ -1074,7 +1079,7 @@ export default function Home() {
     const departure = formatTime(String(form.get("departure") || ""));
     const arrival = formatTime(String(form.get("arrival") || ""));
     const newFlight: DayEvent = {
-      id: `flight-${Date.now()}`,
+      id: `flight-${crypto.randomUUID()}`,
       time: departure,
       title: `${airline} ${number}`,
       meta: `${origin} → ${destination} · Gate TBD`,
@@ -1107,7 +1112,7 @@ export default function Home() {
     const requestedStatus = String(form.get("status") || "Scheduled");
     const status = delayMinutes > 0 ? "Delayed" : requestedStatus;
     const flight: GuestFlight = {
-      id: selectedGuestFlight?.id || `guest-flight-${Date.now()}`,
+      id: selectedGuestFlight?.id || `guest-flight-${crypto.randomUUID()}`,
       guestName: String(form.get("guestName") || "Guest"),
       note: String(form.get("note") || "Friend or family flight"),
       status,
@@ -1181,13 +1186,14 @@ export default function Home() {
     const parsedAmount = parseFloat(rawAmount);
     const amount = Number.isNaN(parsedAmount) ? 0 : parsedAmount;
     const newExp: Expense = {
-      id: "exp-" + Date.now(),
+      id: "exp-" + crypto.randomUUID(),
       description: String(form.get("description") || "Expense"),
       amount,
       currency: String(form.get("currency") || "CHF"),
       paidBy: String(form.get("paidBy") || travelersList[0]?.name || "Organizer"),
       date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
       category: String(form.get("category") || "General"),
+      settled: false
     };
     updateActiveTrip((trip) => ({
       ...trip,
@@ -1222,7 +1228,7 @@ export default function Home() {
     if (!requireSignIn("add a pass")) return;
     const form = new FormData(event.currentTarget);
     const newDoc: WalletDoc = {
-      id: "w-" + Date.now(),
+      id: "w-" + crypto.randomUUID(),
       title: String(form.get("title") || "Pass"),
       meta: String(form.get("meta") || "Ticket Document"),
       code: String(form.get("code") || "JS-TICKET-" + Math.floor(Math.random() * 10000)),
