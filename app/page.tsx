@@ -2137,7 +2137,7 @@ export default function Home() {
                       <span>{currentWeatherError || dynamicWeatherForecast.days[0]?.desc || "Choose a city in trip details"}</span>
                     </div>
                     <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "🌐"}</i><b>☁</b></div>
-                    <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Rain {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
+                    <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Precip. {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
                   </section>
 
                   <section className="expense-card">
@@ -2414,7 +2414,7 @@ export default function Home() {
                     <span>{currentWeatherError || dynamicWeatherForecast.days[0]?.desc || "Choose a city in trip details"}</span>
                   </div>
                   <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "🌐"}</i><b>☁</b></div>
-                  <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Rain {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
+                  <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Precip. {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
                 </section>
 
                 <section className="expense-card">
@@ -2829,7 +2829,7 @@ export default function Home() {
                 <div key={w.day} style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#f8fafc", borderRadius: "6px", fontSize: "10px" }}>
                   <strong>{w.day}</strong>
                   <span>{w.icon} {w.desc} ({w.low}–{w.high})</span>
-                  <small style={{ color: "#64748b" }}>Rain {w.rain}</small>
+                  <small style={{ color: "#64748b" }}>Precip. {w.rain}</small>
                 </div>
               ))}
             </div>

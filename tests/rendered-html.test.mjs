@@ -107,10 +107,10 @@ test("weather endpoint geocodes the selected city and returns a no-cache forecas
   }
 });
 
-test("weather endpoint falls back to MET Norway when Open-Meteo forecast is unavailable", async () => {
+test("weather endpoint falls back to 7Timer when Open-Meteo forecast is unavailable", async () => {
   const originalFetch = globalThis.fetch;
   try {
-    globalThis.fetch = async (input, init) => {
+    globalThis.fetch = async (input) => {
       const url = new URL(String(input instanceof Request ? input.url : input));
       if (url.hostname === "geocoding-api.open-meteo.com") {
         return Response.json({
@@ -126,29 +126,17 @@ test("weather endpoint falls back to MET Norway when Open-Meteo forecast is unav
         });
       }
       if (url.hostname === "api.open-meteo.com") return new Response("rate limited", { status: 429 });
-      if (url.hostname === "api.met.no") {
-        assert.equal(url.searchParams.get("lat"), "41.8781");
-        assert.equal(url.searchParams.get("lon"), "-87.6298");
-        assert.match(new Headers(init?.headers).get("user-agent") ?? "", /JourneySync/i);
+      if (url.hostname === "www.7timer.info") {
+        assert.equal(url.searchParams.get("lat"), "41.878");
+        assert.equal(url.searchParams.get("lon"), "-87.630");
+        assert.equal(url.searchParams.get("product"), "civillight");
         return Response.json({
-          properties: {
-            timeseries: [
-              {
-                time: "2026-08-10T12:00:00Z",
-                data: {
-                  instant: { details: { air_temperature: 20 } },
-                  next_1_hours: { summary: { symbol_code: "partlycloudy_day" }, details: { precipitation_amount: 0 } },
-                },
-              },
-              {
-                time: "2026-08-10T18:00:00Z",
-                data: {
-                  instant: { details: { air_temperature: 25 } },
-                  next_1_hours: { summary: { symbol_code: "clearsky_day" }, details: { precipitation_amount: 0.4 } },
-                },
-              },
-            ],
-          },
+          product: "civillight",
+          dataseries: [{
+            date: 20260810,
+            weather: "lightrain",
+            temp2m: { max: 25, min: 20 },
+          }],
         });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -161,8 +149,8 @@ test("weather endpoint falls back to MET Norway when Open-Meteo forecast is unav
     assert.equal(body.destination, "Chicago");
     assert.equal(body.days[0].high, "77°F");
     assert.equal(body.days[0].low, "68°F");
-    assert.equal(body.days[0].rain, "0.4 mm");
-    assert.equal(body.source, "MET Norway");
+    assert.equal(body.days[0].rain, "Expected");
+    assert.equal(body.source, "7Timer");
   } finally {
     globalThis.fetch = originalFetch;
   }

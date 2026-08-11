@@ -7,7 +7,6 @@ type GeocodingResult = {
   country?: string;
   country_code?: string;
   admin1?: string;
-  timezone?: string;
 };
 
 type GeocodingResponse = {
@@ -25,22 +24,12 @@ type ForecastResponse = {
   };
 };
 
-type MetPeriod = {
-  summary?: { symbol_code?: string };
-  details?: { precipitation_amount?: number };
-};
-
-type MetForecastResponse = {
-  properties?: {
-    timeseries?: Array<{
-      time?: string;
-      data?: {
-        instant?: { details?: { air_temperature?: number } };
-        next_1_hours?: MetPeriod;
-        next_6_hours?: MetPeriod;
-      };
-    }>;
-  };
+type SevenTimerResponse = {
+  dataseries?: Array<{
+    date?: number | string;
+    weather?: string;
+    temp2m?: { max?: number; min?: number };
+  }>;
 };
 
 type WeatherDay = {
@@ -52,8 +41,6 @@ type WeatherDay = {
   icon: string;
   desc: string;
 };
-
-const MET_NORWAY_USER_AGENT = "JourneySync/1.0 https://journeysync-travel.manavdesai53.chatgpt.site";
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, {
@@ -79,20 +66,19 @@ function weatherCondition(code: number): { description: string; icon: string } {
   return { description: "Mixed conditions", icon: "🌤️" };
 }
 
-function metCondition(rawCode: string): { description: string; icon: string } {
-  const code = rawCode.replace(/_(day|night|polartwilight)$/i, "").toLowerCase();
-  if (code.includes("thunder")) return { description: "Thunderstorms", icon: "⛈️" };
-  if (code.includes("snow")) return { description: code.includes("showers") ? "Snow showers" : "Snow", icon: "🌨️" };
-  if (code.includes("sleet")) return { description: "Sleet", icon: "🌨️" };
-  if (code.includes("rain") || code.includes("drizzle")) {
-    return { description: code.includes("showers") ? "Rain showers" : "Rain", icon: "🌧️" };
+function sevenTimerCondition(rawCode: string): { description: string; icon: string; precipitation: string } {
+  const code = rawCode.toLowerCase();
+  if (code.includes("ts")) return { description: "Thunderstorms", icon: "⛈️", precipitation: "Expected" };
+  if (code.includes("snow")) return { description: "Snow", icon: "🌨️", precipitation: "Expected" };
+  if (code.includes("rain") || code.includes("shower")) {
+    return { description: code.includes("shower") ? "Rain showers" : "Rain", icon: "🌧️", precipitation: "Expected" };
   }
-  if (code.includes("fog")) return { description: "Fog", icon: "🌫️" };
-  if (code.includes("partlycloudy")) return { description: "Partly cloudy", icon: "🌤️" };
-  if (code.includes("cloudy")) return { description: "Cloudy", icon: "☁️" };
-  if (code.includes("fair")) return { description: "Mostly clear", icon: "🌤️" };
-  if (code.includes("clearsky")) return { description: "Clear sky", icon: "☀️" };
-  return { description: "Mixed conditions", icon: "🌤️" };
+  if (code === "cloudy" || code === "mcloudy") return { description: "Cloudy", icon: "☁️", precipitation: "Unlikely" };
+  if (code === "pcloudy") return { description: "Partly cloudy", icon: "🌤️", precipitation: "Unlikely" };
+  if (code === "clear") return { description: "Clear sky", icon: "☀️", precipitation: "Unlikely" };
+  if (code === "humid") return { description: "Humid", icon: "🌫️", precipitation: "Unlikely" };
+  if (code === "windy") return { description: "Windy", icon: "💨", precipitation: "Unlikely" };
+  return { description: "Mixed conditions", icon: "🌤️", precipitation: "Possible" };
 }
 
 function clean(value: string | null): string {
@@ -106,6 +92,10 @@ function dayLabel(date: string): string {
     day: "numeric",
     timeZone: "UTC",
   }).format(new Date(`${date}T12:00:00Z`));
+}
+
+function displayTemperature(celsius: number, useFahrenheit: boolean): number {
+  return Math.round(useFahrenheit ? (celsius * 9) / 5 + 32 : celsius);
 }
 
 function openMeteoDays(forecast: ForecastResponse): WeatherDay[] {
@@ -129,104 +119,40 @@ function openMeteoDays(forecast: ForecastResponse): WeatherDay[] {
   });
 }
 
-function localDateAndHour(isoTime: string, timeZone: string): { date: string; hour: number } {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(isoTime));
-    const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
-    return { date: `${value("year")}-${value("month")}-${value("day")}`, hour: Number(value("hour")) };
-  } catch {
-    const date = new Date(isoTime);
-    return { date: date.toISOString().slice(0, 10), hour: date.getUTCHours() };
-  }
-}
-
-function displayTemperature(celsius: number, useFahrenheit: boolean): number {
-  return Math.round(useFahrenheit ? (celsius * 9) / 5 + 32 : celsius);
-}
-
-function rainAmountLabel(amount: number): string {
-  if (amount < 0.05) return "0 mm";
-  if (amount < 10) return `${amount.toFixed(1)} mm`;
-  return `${Math.round(amount)} mm`;
-}
-
-function metNorwayDays(forecast: MetForecastResponse, countryCode: string, timeZone: string): WeatherDay[] {
-  const buckets = new Map<string, {
-    temperatures: number[];
-    rainAmount: number;
-    symbol: string;
-    symbolDistance: number;
-  }>();
-
-  for (const entry of forecast.properties?.timeseries ?? []) {
-    if (!entry.time) continue;
-    const temperature = entry.data?.instant?.details?.air_temperature;
-    if (typeof temperature !== "number") continue;
-    const local = localDateAndHour(entry.time, timeZone);
-    const bucket = buckets.get(local.date) ?? {
-      temperatures: [],
-      rainAmount: 0,
-      symbol: "",
-      symbolDistance: Number.POSITIVE_INFINITY,
-    };
-    bucket.temperatures.push(temperature);
-
-    const period = entry.data?.next_1_hours ?? entry.data?.next_6_hours;
-    const precipitation = period?.details?.precipitation_amount;
-    if (typeof precipitation === "number" && precipitation > 0) bucket.rainAmount += precipitation;
-    const symbol = period?.summary?.symbol_code ?? "";
-    const symbolDistance = Math.abs(local.hour - 12);
-    if (symbol && symbolDistance < bucket.symbolDistance) {
-      bucket.symbol = symbol;
-      bucket.symbolDistance = symbolDistance;
-    }
-    buckets.set(local.date, bucket);
-  }
-
+function sevenTimerDays(forecast: SevenTimerResponse, countryCode: string): WeatherDay[] {
   const useFahrenheit = countryCode === "US";
   const unit = useFahrenheit ? "°F" : "°C";
-  return [...buckets.entries()].sort(([left], [right]) => left.localeCompare(right)).slice(0, 5).map(([date, bucket]) => {
-    const high = displayTemperature(Math.max(...bucket.temperatures), useFahrenheit);
-    const low = displayTemperature(Math.min(...bucket.temperatures), useFahrenheit);
-    const condition = metCondition(bucket.symbol);
-    return {
+  return (forecast.dataseries ?? []).slice(0, 5).flatMap((entry) => {
+    const rawDate = String(entry.date ?? "").padStart(8, "0");
+    const highCelsius = entry.temp2m?.max;
+    const lowCelsius = entry.temp2m?.min;
+    if (!/^\d{8}$/.test(rawDate) || typeof highCelsius !== "number" || typeof lowCelsius !== "number") return [];
+    const date = `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}`;
+    const high = displayTemperature(highCelsius, useFahrenheit);
+    const low = displayTemperature(lowCelsius, useFahrenheit);
+    const condition = sevenTimerCondition(entry.weather ?? "");
+    return [{
       day: dayLabel(date),
       temp: `${high}${unit}`,
       high: `${high}${unit}`,
       low: `${low}${unit}`,
-      rain: rainAmountLabel(bucket.rainAmount),
+      rain: condition.precipitation,
       icon: condition.icon,
       desc: condition.description,
-    };
+    }];
   });
 }
 
-async function fetchMetNorwayForecast(
-  latitude: number,
-  longitude: number,
-  countryCode: string,
-  timeZone: string,
-): Promise<WeatherDay[]> {
-  const forecastUrl = new URL("https://api.met.no/weatherapi/locationforecast/2.0/compact");
-  forecastUrl.searchParams.set("lat", latitude.toFixed(4));
-  forecastUrl.searchParams.set("lon", longitude.toFixed(4));
-  const response = await fetch(forecastUrl, {
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
-      "User-Agent": MET_NORWAY_USER_AGENT,
-    },
-  });
-  if (!response.ok) throw new Error(`MET Norway returned ${response.status}`);
-  const days = metNorwayDays((await response.json()) as MetForecastResponse, countryCode, timeZone);
-  if (days.length === 0) throw new Error("MET Norway returned no forecast days");
+async function fetchSevenTimerForecast(latitude: number, longitude: number, countryCode: string): Promise<WeatherDay[]> {
+  const forecastUrl = new URL("https://www.7timer.info/bin/api.pl");
+  forecastUrl.searchParams.set("lat", latitude.toFixed(3));
+  forecastUrl.searchParams.set("lon", longitude.toFixed(3));
+  forecastUrl.searchParams.set("product", "civillight");
+  forecastUrl.searchParams.set("output", "json");
+  const response = await fetch(forecastUrl, { cache: "no-store", headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`7Timer returned ${response.status}`);
+  const days = sevenTimerDays((await response.json()) as SevenTimerResponse, countryCode);
+  if (days.length === 0) throw new Error("7Timer returned no forecast days");
   return days;
 }
 
@@ -277,14 +203,9 @@ export async function GET(request: Request): Promise<Response> {
       days = openMeteoDays((await forecastResponse.json()) as ForecastResponse);
       if (days.length === 0) throw new Error("Open-Meteo returned no forecast days");
     } catch (error) {
-      console.warn("Open-Meteo forecast unavailable; using MET Norway fallback.", error);
-      days = await fetchMetNorwayForecast(
-        location.latitude,
-        location.longitude,
-        location.country_code || countryCode,
-        location.timezone || "UTC",
-      );
-      source = "MET Norway";
+      console.warn("Open-Meteo forecast unavailable; using 7Timer fallback.", error);
+      days = await fetchSevenTimerForecast(location.latitude, location.longitude, location.country_code || countryCode);
+      source = "7Timer";
     }
 
     return json({

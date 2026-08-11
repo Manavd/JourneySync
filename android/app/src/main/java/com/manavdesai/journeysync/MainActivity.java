@@ -724,7 +724,7 @@ public class MainActivity extends android.app.Activity {
             weather.addView(text(snapshot.destination, 19, NAVY, true));
             weather.addView(text(snapshot.day + "  ·  " + snapshot.description, 13, MUTED, false), margins(0, 3, 0, 8));
             weather.addView(text(snapshot.icon + "  " + snapshot.high + " / " + snapshot.low, 28, NAVY, true));
-            weather.addView(text("Rain " + snapshot.rain + "  ·  Live from " + snapshot.source, 12, FAINT, false), margins(0, 5, 0, 10));
+            weather.addView(text("Precipitation " + snapshot.rain + "  ·  Live from " + snapshot.source, 12, FAINT, false), margins(0, 5, 0, 10));
         }
         Button refresh = outlineButton("Refresh weather");
         refresh.setOnClickListener(v -> {
