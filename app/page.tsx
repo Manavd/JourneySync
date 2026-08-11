@@ -483,7 +483,7 @@ export default function Home() {
         const docRef = doc(db, "users", currentUser.uid, "user_trips", "all_trips");
         unsubscribeCloud = onSnapshot(docRef, (snap) => {
           if (snap.exists()) {
-            const data = snap.data();
+            const data = snap.data() as Record<string, any> | undefined;
             if (data && data.savedTrips && Array.isArray(data.savedTrips) && data.savedTrips.length > 0) {
               const incomingTrips = data.savedTrips as Trip[];
               setSavedTrips((current) => JSON.stringify(current) === JSON.stringify(incomingTrips) ? current : incomingTrips);
@@ -1025,8 +1025,8 @@ export default function Home() {
             : item),
         })),
       }));
-      setSelectedEvent((current) => current?.id === event.id
-        ? { ...current, status: live.status, flight: { ...current.flight, ...live.flight } }
+      setSelectedEvent((current) => (current && current.id === event.id)
+        ? { ...current, status: live.status, flight: { ...(current.flight || {}), ...live.flight } } as DayEvent
         : current);
       notify(`${live.flight.number} refreshed from AeroDataBox`);
     } catch (error) {
