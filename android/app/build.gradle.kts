@@ -13,7 +13,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
-        buildConfigField("String", "FLIGHT_API_BASE_URL", "\"https://journeysync-travel.manavdesai53.chatgpt.site\"")
+        buildConfigField("String", "FLIGHT_API_BASE_URL", "\"https://journeysync-travel-planner.manavdesai.workers.dev\"")
     }
 
     buildFeatures {

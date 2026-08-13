@@ -141,7 +141,12 @@ public class MainActivity extends android.app.Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         firebaseAuth = FirebaseAuth.getInstance();
-        firestore = FirebaseFirestore.getInstance();
+        // The project's Firestore database is named "default" (no parens), not
+        // the SDK's implicit "(default)" database. Without pinning this
+        // explicitly, every read/write silently targets a database that
+        // doesn't exist and retries forever - trips never load. Same bug and
+        // same fix as app/firebase.ts on the web side.
+        firestore = FirebaseFirestore.getInstance("default");
         getWindow().setStatusBarColor(Color.parseColor(SURFACE));
         getWindow().setNavigationBarColor(Color.parseColor(INK));
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
