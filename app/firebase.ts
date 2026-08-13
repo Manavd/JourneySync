@@ -19,6 +19,9 @@ import {
 } from "firebase/auth";
 import {
   getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentSingleTabManager,
   doc as firestoreDoc,
   setDoc as firestoreSetDoc,
   getDoc as firestoreGetDoc,
@@ -81,7 +84,25 @@ if (typeof window !== "undefined") {
     try {
       app = getApps().length ? getApp() : initializeApp(firebaseConfig);
       authInstance = getAuth(app);
-      dbInstance = getFirestore(app);
+      // The project's Firestore database is named "default" (no parens),
+      // not the SDK's implicit "(default)" database. Without pinning this
+      // explicitly, every read/write silently targets a database that
+      // doesn't exist and retries forever with exponential backoff -
+      // trips never load and sign-in appears to hang indefinitely.
+      //
+      // Persistent local cache lets a returning sign-in paint trip data
+      // instantly from IndexedDB while Firestore reconciles in the
+      // background, instead of every load waiting on a fresh network
+      // round trip. Falls back to the default memory-only cache in
+      // environments where IndexedDB persistence isn't available (e.g.
+      // private browsing, multiple open tabs without broadcast support).
+      try {
+        dbInstance = initializeFirestore(app, {
+          localCache: persistentLocalCache({ tabManager: persistentSingleTabManager({}) }),
+        }, "default");
+      } catch {
+        dbInstance = getFirestore(app, "default");
+      }
     } catch (error) {
       initializationError = error;
       console.error("Firebase initialization failed:", error);
