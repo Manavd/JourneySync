@@ -1473,7 +1473,7 @@ export default function Home() {
       setSelectedEvent((current) => (current && current.id === event.id)
         ? { ...current, status: live.status, flight: { ...(current.flight || {}), ...live.flight } } as DayEvent
         : current);
-      notify(`${live.flight.number} refreshed from AeroDataBox`);
+      notify(`${live.flight.number} refreshed from ${live.flight.source || "live flight data"}`);
     } catch (error) {
       notify(friendlyFlightError(error));
     } finally {
@@ -2249,7 +2249,7 @@ export default function Home() {
                     )}
                     <label>Departure date<input name="departureDate" type="date" defaultValue={activeTrip?.startDate || ""} required /></label>
                     <button className="primary-action live-search-button" disabled={flightSearchBusy}>
-                      {flightSearchBusy ? "Checking AeroDataBox…" : "Search live flights"}
+                      {flightSearchBusy ? "Checking live flights…" : "Search live flights"}
                     </button>
                   </div>
                 </form>
@@ -2330,7 +2330,7 @@ export default function Home() {
                   <button className="primary-action tracker-add" onClick={() => openMutationPanel("track-flight")}>Track your first flight</button>
                 </div>
               )}
-              <p className="tracker-note">Live updates come from AeroDataBox and are saved to Firebase for your other devices.</p>
+              <p className="tracker-note">Live updates come from AeroDataBox, with AviationStack as a backup, and are saved to Firebase for your other devices.</p>
             </div>
           )}
 
@@ -2397,7 +2397,7 @@ export default function Home() {
                   <button className="primary-action tracker-add" onClick={() => { setSelectedGuestFlight(null); openMutationPanel("guest-flight"); }}>Watch a guest flight</button>
                 </div>
               )}
-              <p className="tracker-note">AeroDataBox supplies live operational updates; JourneySync saves the latest result to your Firebase account.</p>
+              <p className="tracker-note">AeroDataBox supplies live operational updates, falling back to AviationStack; JourneySync saves the latest result to your Firebase account.</p>
             </div>
           )}
 

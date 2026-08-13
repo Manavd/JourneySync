@@ -13,10 +13,23 @@
           "package_name": "com.manavdesai.journeysync"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "1023637394063-vnngvm006g08mas7eh10iffggchpf2q6.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.manavdesai.journeysync",
+            "certificate_hash": "5e9e525fe87b00e1c559ce8f7b11a5e81bcd6799"
+          }
+        },
+        {
+          "client_id": "1023637394063-0221ka1qlp1eo360qhoopht0t94087s3.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
-          "current_key": "AIzaSyAKuoDqHSgNYObuQUpWoEfctADfpNkOkh8"
+          "current_key": "AIzaSyD6vqgQ9sTotgUOSuDX_Mc36Tw8vAxoFEo"
         }
       ],
       "services": {

@@ -103,7 +103,12 @@ public class MainActivity extends android.app.Activity {
     private static final String[] EVENT_KIND_LABELS = {
             "🏛️ Activity", "✈️ Flight", "🏨 Stay", "🍽️ Food / Dining", "🚆 Train / Transit"
     };
-    private static final String[] FLIGHT_STATUSES = {"Scheduled", "On time", "Delayed", "Boarding", "Departed", "Landed", "Cancelled"};
+    // Must cover every status the /api/flights/status route can return, including
+    // Diverted and Incident from the AviationStack fallback. indexOfIgnoreCase
+    // falls back to index 0 ("Scheduled") for anything missing here, so an
+    // absent status would silently rewrite a diverted flight as scheduled when
+    // the edit dialog is saved.
+    private static final String[] FLIGHT_STATUSES = {"Scheduled", "On time", "Delayed", "Boarding", "Departed", "Landed", "Diverted", "Incident", "Cancelled"};
 
     private FirebaseAuth firebaseAuth;
     private FirebaseFirestore firestore;
@@ -694,7 +699,7 @@ public class MainActivity extends android.app.Activity {
             activeSection = SECTION_FLIGHTS;
             renderDashboard(user);
         }));
-        screen.addView(sectionLink("GUEST FLIGHT WATCH", "Track friends and family with live AeroDataBox updates", () -> {
+        screen.addView(sectionLink("GUEST FLIGHT WATCH", "Track friends and family with live flight updates", () -> {
             activeSection = SECTION_GUEST_FLIGHTS;
             renderDashboard(user);
         }));
@@ -1216,7 +1221,7 @@ public class MainActivity extends android.app.Activity {
             liveRefreshes.add(refreshKey);
         }
 
-        if (!background) toast("Checking AeroDataBox for " + flight.number + "…");
+        if (!background) toast("Checking live flight data for " + flight.number + "…");
         user.getIdToken(false).addOnSuccessListener(tokenResult -> new Thread(() -> {
             HttpURLConnection connection = null;
             try {
@@ -1261,7 +1266,7 @@ public class MainActivity extends android.app.Activity {
                     }
                     if (guest != null) guest.status = liveStatus;
                     commit(user);
-                    if (!background) toast(flight.number + " refreshed from AeroDataBox");
+                    if (!background) toast(flight.number + " refreshed from " + sourceLabel(flight));
                 });
             } catch (Exception error) {
                 recordRefreshFailure(refreshKey);
@@ -1474,7 +1479,7 @@ public class MainActivity extends android.app.Activity {
         liveFinder.addView(text("Live flight information", 18, INK, true));
         liveFinder.addView(text("Search by flight number and departure airport, or by route. Then choose the correct live result from a dropdown.",
                 13, MUTED, false), margins(0, 4, 0, 12));
-        Button liveSearch = primaryButton("Search AeroDataBox");
+        Button liveSearch = primaryButton("Search live flights");
         liveSearch.setOnClickListener(v -> showLiveFlightSearchDialog(user, trip));
         liveFinder.addView(liveSearch);
         screen.addView(liveFinder, margins(0, 0, 0, 14));
@@ -1682,7 +1687,7 @@ public class MainActivity extends android.app.Activity {
 
     private void requestLiveFlightSearch(FirebaseUser user, Trip trip, boolean routeSearch,
                                          String origin, String destination, String number, String date) {
-        toast("Checking AeroDataBox live flight information…");
+        toast("Checking live flight information…");
         user.getIdToken(false).addOnSuccessListener(tokenResult -> new Thread(() -> {
             HttpURLConnection connection = null;
             try {
@@ -1757,7 +1762,7 @@ public class MainActivity extends android.app.Activity {
         previewBackground.setStroke(dp(1), Color.parseColor(INK));
         preview.setBackground(previewBackground);
         content.addView(preview);
-        content.addView(text("The selected result will populate the tracked flight with current AeroDataBox data.",
+        content.addView(text("The selected result will populate the tracked flight with current live flight data.",
                 12, FAINT, false), margins(0, 10, 0, 0));
         resultSelector.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
@@ -1793,7 +1798,7 @@ public class MainActivity extends android.app.Activity {
         day.events.add(event);
         activeSection = SECTION_FLIGHTS;
         commit(user);
-        toast(flight.number + " added from live AeroDataBox data");
+        toast(flight.number + " added from " + sourceLabel(flight));
     }
 
     private String liveFlightPreview(JSONObject result) {
@@ -3058,6 +3063,18 @@ public class MainActivity extends android.app.Activity {
 
     private static String expenseCurrency(Trip trip) {
         return trip == null ? "USD" : safeText(trip.currency, "USD").toUpperCase(Locale.US);
+    }
+
+    /**
+     * Names the provider that actually answered. The server picks between
+     * AeroDataBox and AviationStack per request and reports it as `source`, so
+     * the UI reads that back instead of naming one provider it may not have used.
+     */
+    private static String sourceLabel(FlightInfo flight) {
+        if (flight != null && flight.source != null && !flight.source.trim().isEmpty()) {
+            return flight.source.trim();
+        }
+        return "live flight data";
     }
 
     private static int indexOfIgnoreCase(String[] values, String needle) {
