@@ -39,6 +39,16 @@ firebase-debug.log
 .env*
 !.env.local.example
 
+# Plaintext credential notes. This repo is public, so a stray key file in the
+# tree is one `git add .` away from being published. Secrets belong in
+# .env.local for local dev and in `wrangler secret put` for the deployed Worker.
+*[Aa][Pp][Ii]*[Kk][Ee][Yy]*.txt
+*[Ss][Ee][Cc][Rr][Ee][Tt]*.txt
+*[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]*.txt
+*.pem
+*.p12
+service-account*.json
+
 # vercel
 .vercel
 
