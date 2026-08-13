@@ -1,10 +1,12 @@
 <resources>
     <style name="Theme.JourneySync" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:fontFamily">sans</item>
+        <item name="android:fontFamily">sans-serif</item>
         <item name="android:windowActionModeOverlay">true</item>
+        <!-- Light surface behind the status bar, so dark status icons stay legible. -->
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:statusBarColor">@color/journeysync_background</item>
-        <item name="android:navigationBarColor">@color/journeysync_ink</item>
-        <item name="android:windowBackground">@color/journeysync_background</item>
+        <item name="android:statusBarColor">@color/journeysync_surface</item>
+        <item name="android:navigationBarColor">@color/journeysync_navy</item>
+        <item name="android:windowBackground">@color/journeysync_surface</item>
+        <item name="android:colorAccent">@color/journeysync_coral</item>
     </style>
 </resources>

@@ -4,7 +4,9 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -12,6 +14,9 @@ import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowInsets;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
 import android.widget.AdapterView;
 import android.widget.Button;
 import android.widget.ArrayAdapter;
@@ -73,6 +78,8 @@ public class MainActivity extends android.app.Activity {
     private static final String INK = "#1B2731";
     private static final String SURFACE = "#FFFDF8";
     private static final String CORAL = "#EF7159";
+    /** Darker coral used for the pressed state on filled buttons. */
+    private static final String CORAL_PRESSED = "#D85C45";
     private static final String NAVY = "#17212B";
     private static final String CREAM = "#F4F1EA";
     private static final String MINT = "#B9DDC7";
@@ -154,7 +161,7 @@ public class MainActivity extends android.app.Activity {
         firestore = FirebaseFirestore.getInstance("default");
         getWindow().setStatusBarColor(Color.parseColor(SURFACE));
         getWindow().setNavigationBarColor(Color.parseColor(INK));
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+        setLightStatusBar(true);
 
         GoogleSignInOptions googleOptions = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestIdToken(getString(R.string.google_web_client_id))
@@ -226,6 +233,7 @@ public class MainActivity extends android.app.Activity {
         appRoot = new LinearLayout(this);
         appRoot.setOrientation(LinearLayout.VERTICAL);
         appRoot.setBackgroundColor(Color.parseColor(SURFACE));
+        applySystemBarInsets(appRoot);
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         screen = new LinearLayout(this);
@@ -245,7 +253,9 @@ public class MainActivity extends android.app.Activity {
             tripsListener = null;
         }
         prepareScreen();
-        getWindow().getDecorView().setSystemUiVisibility(0);
+        // Dark icons: with insets applied the status bar sits on the cream
+        // surface rather than on the navy hero, so white icons were invisible.
+        setLightStatusBar(true);
         renderedUid = null;
         tripsLoaded = false;
         showingTripLibrary = true;
@@ -367,13 +377,13 @@ public class MainActivity extends android.app.Activity {
 
     private void showDashboard(FirebaseUser user) {
         prepareScreen();
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+        setLightStatusBar(true);
         renderedUid = user.getUid();
         if (tripsLoaded) {
             renderCurrentView(user);
             return;
         }
-        screen.addView(text("JourneySync", 25, BLUE, true));
+        screen.addView(text("JourneySync", 25, INK, true));
         screen.addView(text("Loading your itineraries…", 14, MUTED, false), margins(0, 6, 0, 16));
         ProgressBar progress = new ProgressBar(this);
         screen.addView(progress, margins(0, 10, 0, 10));
@@ -612,7 +622,7 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void renderEmptyDashboard(FirebaseUser user) {
-        screen.addView(text("JOURNEYSYNC", 13, BLUE, true));
+        screen.addView(text("JOURNEYSYNC", 13, CORAL, true));
         screen.addView(text("Create your first trip", 30, INK, true), margins(0, 18, 0, 8));
         screen.addView(text("Build any itinerary you want. Days, activities, flights, expenses, passes, places, and travelers will be saved to your Firebase profile.",
                 15, MUTED, false), margins(0, 0, 0, 24));
@@ -641,15 +651,20 @@ public class MainActivity extends android.app.Activity {
         border.setStroke(dp(2), Color.parseColor(INK));
         nav.setBackground(border);
 
-        String[] labels = {"TODAY", "PLAN", "ROUTE", "SPLIT", "WALLET"};
-        int[] sections = {SECTION_OVERVIEW, SECTION_ITINERARY, SECTION_MAP, SECTION_EXPENSES, SECTION_WALLET};
+        // Labels and glyphs mirror the website's sidebar. The tabs previously read
+        // "1 TODAY / 2 PLAN / 3 ROUTE / 4 SPLIT / 5 WALLET", which hid the map
+        // behind a number and a synonym. Flights gets a tab of its own rather
+        // than living only behind an overview link.
+        String[] glyphs = {"⌂", "≡", "✈", "◇", "¤", "▣"};
+        String[] labels = {"Overview", "Plan", "Flights", "Map", "Expenses", "Wallet"};
+        int[] sections = {SECTION_OVERVIEW, SECTION_ITINERARY, SECTION_FLIGHTS, SECTION_MAP, SECTION_EXPENSES, SECTION_WALLET};
         int selected = activeSection;
-        if (selected == SECTION_FLIGHTS || selected == SECTION_GUEST_FLIGHTS || selected == SECTION_TRAVELERS) {
+        if (selected == SECTION_GUEST_FLIGHTS || selected == SECTION_TRAVELERS) {
             selected = SECTION_OVERVIEW;
         }
         for (int i = 0; i < labels.length; i++) {
             final int section = sections[i];
-            nav.addView(navItem(String.valueOf(i + 1), labels[i], section == selected, () -> {
+            nav.addView(navItem(glyphs[i], labels[i], section == selected, () -> {
                 activeSection = section;
                 renderDashboard(user);
             }), new LinearLayout.LayoutParams(0, dp(66), 1));
@@ -797,8 +812,74 @@ public class MainActivity extends android.app.Activity {
         }).start();
     }
 
+    /**
+     * Builds a Leaflet/OpenStreetMap page for the pins that carry coordinates.
+     * Mirrors the web TripMap component, and needs no API key or billing the
+     * way the Google Maps SDK would. Coordinates are emitted as a JSON array
+     * rather than interpolated into JS statements so a quote in a pin name
+     * cannot break the script.
+     */
+    private String tripMapHtml(List<MapPin> pins) {
+        StringBuilder markers = new StringBuilder("[");
+        boolean first = true;
+        for (MapPin pin : pins) {
+            if (pin == null || !pin.hasCoordinates()) continue;
+            if (!first) markers.append(',');
+            first = false;
+            markers.append("{\"lat\":").append(pin.latitude)
+                    .append(",\"lon\":").append(pin.longitude)
+                    .append(",\"name\":").append(JSONObject.quote(safeText(pin.name, "Destination")))
+                    .append(",\"desc\":").append(JSONObject.quote(safeText(pin.desc, "")))
+                    .append('}');
+        }
+        markers.append(']');
+
+        return "<!doctype html><html><head><meta charset='utf-8'>"
+                + "<meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=1'>"
+                + "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>"
+                + "<style>html,body,#map{height:100%;margin:0;background:" + CREAM + ";}"
+                + ".leaflet-container{font-family:sans-serif;}</style></head><body><div id='map'></div>"
+                + "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script><script>"
+                + "var pts=" + markers + ";"
+                + "var map=L.map('map',{zoomControl:true,attributionControl:false});"
+                + "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(map);"
+                + "if(pts.length){var g=[];pts.forEach(function(p){"
+                + "var m=L.marker([p.lat,p.lon]).addTo(map);"
+                + "m.bindPopup('<b>'+p.name+'</b>'+(p.desc?'<br>'+p.desc:''));g.push([p.lat,p.lon]);});"
+                + "if(g.length>1){map.fitBounds(g,{padding:[30,30]});}else{map.setView(g[0],11);}"
+                + "if(g.length>1){L.polyline(g,{color:'" + CORAL + "',weight:3,opacity:.7}).addTo(map);}"
+                + "}else{map.setView([20,0],1);}"
+                + "</script></body></html>";
+    }
+
     private void renderMap(FirebaseUser user, Trip trip) {
-        screen.addView(sectionLabel("ROUTE"), margins(0, 0, 0, 8));
+        screen.addView(sectionLabel("MAP"), margins(0, 0, 0, 8));
+
+        List<MapPin> located = new ArrayList<>();
+        if (trip.mapPins != null) {
+            for (MapPin pin : trip.mapPins) {
+                if (pin != null && pin.hasCoordinates()) located.add(pin);
+            }
+        }
+        if (!located.isEmpty()) {
+            WebView map = new WebView(this);
+            WebSettings settings = map.getSettings();
+            settings.setJavaScriptEnabled(true);
+            settings.setDomStorageEnabled(true);
+            map.setBackgroundColor(Color.parseColor(CREAM));
+            GradientDrawable frame = new GradientDrawable();
+            frame.setColor(Color.parseColor(CREAM));
+            frame.setCornerRadius(dp(RADIUS_DP));
+            map.setBackground(frame);
+            map.setClipToOutline(true);
+            map.loadDataWithBaseURL("https://tile.openstreetmap.org/", tripMapHtml(located),
+                    "text/html", "utf-8", null);
+            LinearLayout.LayoutParams mapParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(240));
+            mapParams.bottomMargin = dp(16);
+            screen.addView(map, mapParams);
+        }
+
         LinearLayout heading = new LinearLayout(this);
         heading.setOrientation(LinearLayout.HORIZONTAL);
         heading.setGravity(Gravity.CENTER_VERTICAL);
@@ -849,7 +930,7 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void renderExpenses(FirebaseUser user, Trip trip) {
-        screen.addView(sectionLabel("SPLIT"), margins(0, 0, 0, 8));
+        screen.addView(sectionLabel("EXPENSES"), margins(0, 0, 0, 8));
         LinearLayout heading = new LinearLayout(this);
         heading.setOrientation(LinearLayout.HORIZONTAL);
         heading.setGravity(Gravity.CENTER_VERTICAL);
@@ -2690,14 +2771,14 @@ public class MainActivity extends android.app.Activity {
         item.setOnClickListener(v -> action.run());
 
         View indicator = new View(this);
-        indicator.setBackgroundColor(Color.parseColor(selected ? BLUE : SURFACE));
+        indicator.setBackgroundColor(Color.parseColor(selected ? CORAL : SURFACE));
         item.addView(indicator, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(3)));
 
-        TextView icon = text(glyph, 17, selected ? BLUE : INK, true);
+        TextView icon = text(glyph, 17, selected ? CORAL : INK, true);
         icon.setGravity(Gravity.CENTER);
         item.addView(icon, margins(0, 8, 0, 1));
-        TextView caption = text(label, 9, selected ? BLUE : MUTED, true);
+        TextView caption = text(label, 9, selected ? CORAL : MUTED, true);
         caption.setGravity(Gravity.CENTER);
         caption.setLetterSpacing(.08f);
         item.addView(caption);
@@ -2817,47 +2898,58 @@ public class MainActivity extends android.app.Activity {
         input.setInputType(inputType);
         input.setSingleLine(true);
         input.setMinHeight(dp(50));
-        input.setPadding(dp(2), dp(10), dp(2), dp(10));
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.parseColor(SURFACE));
-        background.setCornerRadius(0);
-        background.setStroke(dp(1), Color.parseColor(INK));
-        input.setBackground(background);
+        // Rounded to match the buttons; square-cornered fields next to rounded
+        // buttons was a large part of the unfinished look.
+        input.setPadding(dp(14), dp(12), dp(14), dp(12));
+        input.setTextColor(Color.parseColor(INK));
+        input.setHintTextColor(Color.parseColor(MUTED));
+        input.setBackground(roundedFill(SURFACE, LINE));
         return input;
+    }
+
+    /** Rounded corner radius shared by buttons and cards, matching the web UI. */
+    private static final int RADIUS_DP = 10;
+
+    private GradientDrawable roundedFill(String fill, String stroke) {
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(Color.parseColor(fill));
+        shape.setCornerRadius(dp(RADIUS_DP));
+        if (stroke != null) shape.setStroke(dp(1), Color.parseColor(stroke));
+        return shape;
+    }
+
+    /**
+     * Buttons previously used square corners with no pressed state, which read
+     * as unfinished next to the website. This gives them the site's rounded
+     * shape plus a visible press response.
+     */
+    private void styleButton(Button button, String fill, String pressedFill, String stroke, String textColor) {
+        button.setTextColor(Color.parseColor(textColor));
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        button.setAllCaps(false);
+        button.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        button.setLetterSpacing(.01f);
+        button.setMinHeight(dp(48));
+        button.setPadding(dp(18), dp(12), dp(18), dp(12));
+        button.setStateListAnimator(null);
+
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, roundedFill(pressedFill, stroke));
+        states.addState(new int[]{}, roundedFill(fill, stroke));
+        button.setBackground(states);
     }
 
     private Button primaryButton(String label) {
         Button button = new Button(this);
         button.setText(label);
-        button.setTextColor(Color.WHITE);
-        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        button.setAllCaps(true);
-        button.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        button.setLetterSpacing(.06f);
-        button.setMinHeight(dp(48));
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.parseColor(CORAL));
-        background.setCornerRadius(0);
-        button.setBackground(background);
-        button.setPadding(dp(14), dp(10), dp(14), dp(10));
+        styleButton(button, CORAL, CORAL_PRESSED, null, "#FFFFFF");
         return button;
     }
 
     private Button outlineButton(String label) {
         Button button = new Button(this);
         button.setText(label);
-        button.setTextColor(Color.parseColor(INK));
-        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        button.setAllCaps(true);
-        button.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        button.setLetterSpacing(.04f);
-        button.setMinHeight(dp(48));
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.parseColor(SURFACE));
-        background.setCornerRadius(0);
-        background.setStroke(dp(2), Color.parseColor(INK));
-        button.setBackground(background);
-        button.setPadding(dp(14), dp(10), dp(14), dp(10));
+        styleButton(button, SURFACE, CREAM, LINE, INK);
         return button;
     }
 
@@ -3063,6 +3155,56 @@ public class MainActivity extends android.app.Activity {
 
     private static String expenseCurrency(Trip trip) {
         return trip == null ? "USD" : safeText(trip.currency, "USD").toUpperCase(Locale.US);
+    }
+
+    /**
+     * Switches the status bar icons between dark (for light backgrounds) and
+     * light. setSystemUiVisibility is deprecated and ignored from Android 11,
+     * which left the icons unreadable against the cream surface, so R and above
+     * go through WindowInsetsController instead.
+     */
+    private void setLightStatusBar(boolean darkIcons) {
+        // Reading the decor view first forces the window to build it. Going
+        // straight to Window#getInsetsController() during onCreate throws,
+        // because the decor view does not exist until it is requested.
+        View decor = getWindow().getDecorView();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.view.WindowInsetsController controller = decor.getWindowInsetsController();
+            if (controller != null) {
+                controller.setSystemBarsAppearance(
+                        darkIcons ? android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS : 0,
+                        android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+            }
+        } else {
+            decor.setSystemUiVisibility(darkIcons ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR : 0);
+        }
+    }
+
+    /**
+     * Keeps content clear of the status and navigation bars.
+     *
+     * targetSdk 35 opts the app into Android 15's enforced edge-to-edge layout,
+     * where the window is laid out behind the system bars. Without consuming
+     * the insets the header renders underneath the notification bar, so pad the
+     * root by whatever the system bars occupy. Uses the typed WindowInsets API
+     * on R+ and the pre-R accessors below that, since minSdk is 23.
+     */
+    private void applySystemBarInsets(View root) {
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            int top;
+            int bottom;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                top = bars.top;
+                bottom = bars.bottom;
+            } else {
+                top = insets.getSystemWindowInsetTop();
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(view.getPaddingLeft(), top, view.getPaddingRight(), bottom);
+            return insets;
+        });
+        root.requestApplyInsets();
     }
 
     /**
