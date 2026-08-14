@@ -1,98 +1,200 @@
-# vinext-starter
+# JourneySync
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+Every plan. Every person. One journey.
+
+A collaborative trip planner: itineraries, live flight tracking, group
+expenses, travel documents, and a trip map, all synced to a signed-in user's
+private Firestore document and mirrored by a companion Android app.
+
+## Stack
+
+- [vinext](https://github.com/cloudflare/vinext) (Next.js App Router APIs on
+  Vite), React 19 RSC
+- Cloudflare Workers runtime, with the Images binding for image optimization
+- Firebase Authentication and Cloud Firestore
+- Leaflet with OpenStreetMap tiles
+- Tailwind CSS 4
+- Drizzle ORM with Cloudflare D1 (scaffolded, not currently used)
 
 ## Prerequisites
 
 - Node.js `>=22.13.0`
+- A Firebase project with Authentication (Email/Password and Google) and
+  Firestore enabled
+- Optional: an AeroDataBox and/or AviationStack API key for live flight data
 
-## Quick Start
+## Quick start
 
 ```bash
 npm install
+cp .env.local.example .env.local   # then fill in your Firebase values
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+The Firebase values are read at build time and inlined into the browser
+bundle, so a running dev server must be restarted after editing `.env.local`.
+If the placeholders are left in place, the app logs a configuration error and
+sign-in is disabled rather than failing silently.
 
-## Included Shape
+## Environment variables
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+Client values are inlined into the browser bundle and are safe to expose.
+Server values must never be prefixed with `NEXT_PUBLIC_`.
 
-## Workspace Auth Headers
+| Variable | Scope | Required | Purpose |
+| --- | --- | --- | --- |
+| `NEXT_PUBLIC_FIREBASE_API_KEY` | client | yes | Firebase config, and server-side ID token verification |
+| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | client | yes | Firebase config |
+| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | client | yes | Firebase config |
+| `NEXT_PUBLIC_FIREBASE_APP_ID` | client | yes | Firebase config |
+| `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | client | no | Firebase config |
+| `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | client | no | Firebase config |
+| `NEXT_PUBLIC_FIREBASE_DATABASE_URL` | client | no | Firebase config |
+| `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` | client | no | Firebase config |
+| `AERODATABOX_API_KEY` | server | no | Primary live flight provider |
+| `AERODATABOX_API_HOST` | server | no | Defaults to `aerodatabox.p.rapidapi.com` |
+| `AVIATIONSTACK_API_KEY` | server | no | Fallback live flight provider |
 
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
+Only `NEXT_PUBLIC_FIREBASE_API_KEY`, `AUTH_DOMAIN`, `PROJECT_ID` and `APP_ID`
+are validated at startup. Live flight tracking returns HTTP 503 when neither
+provider key is set; everything else in the app still works.
 
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
+## Scripts
 
-Treat the full name as optional and fall back to email when it is absent:
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Vinext dev server with Cloudflare bindings simulated locally |
+| `npm run build` | Production build into `dist/` |
+| `npm start` | Serve the production build |
+| `npm run lint` | ESLint |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm test` | lint, typecheck, build, then the `tests/` suite |
+| `npm run db:generate` | Drizzle migration generation (unused today) |
 
-```tsx
-import { headers } from "next/headers";
+## Features
 
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
+The signed-in app is a single page with seven sections:
 
-  const displayName = fullName ?? email;
-  // ...
-}
+- **Overview**: next arrival, today's plan, and a running expense summary
+- **Itinerary**: day-by-day events typed as flight, stay, food, train, or
+  activity
+- **Flight Tracker**: live status by flight number or by origin/destination
+  route and date
+- **Guest Flights**: the same live lookup for other travelers' inbound flights
+- **Map**: geocoded trip pins on a Leaflet map
+- **Expenses**: per-trip spending with currency inferred from the destination
+- **Wallet**: boarding passes and travel documents attached to the trip
+
+Trips can be archived, and a trip whose end date has passed is shown as
+completed rather than active.
+
+## API routes
+
+All routes are `force-dynamic` and send no-store cache headers.
+
+| Route | Method | Auth | Upstream |
+| --- | --- | --- | --- |
+| `/api/flights/status` | POST | Firebase ID token | AeroDataBox, then AviationStack |
+| `/api/weather` | GET | none | Open-Meteo, falling back to 7Timer |
+| `/api/geocode` | GET | none | Nominatim (OpenStreetMap) |
+| `/api/version` | GET | none | none |
+
+### Live flight lookups
+
+`/api/flights/status` is the only authenticated route. The client sends a
+Firebase ID token as a bearer token, the route verifies it against the
+Identity Toolkit, and only then calls an upstream provider with a server-held
+key. Provider keys never reach a browser or the Android app.
+
+AeroDataBox is primary because it answers date-scoped lookups on the free
+plan. AviationStack is the fallback because it gates `flight_date` behind a
+paid tier and allows 100 requests per month for free. The fallback fires both
+when the primary errors and when it returns no record. Both providers are
+normalized into one response shape, so clients never learn which one answered.
+
+### Release refresh
+
+`/api/version` returns the build ID baked in at build time as
+`__JOURNEYSYNC_BUILD_ID__`. The client polls it once a minute while the tab is
+visible and reloads when the deployed build changes, so travelers on a
+long-lived tab pick up new releases. A failed poll is ignored rather than
+interrupting someone offline.
+
+## Data and sync
+
+Trips are stored as a single JSON document per user:
+
+```
+users/{uid}/user_trips/all_trips
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+Firestore rules restrict every document under `users/{userId}` to that
+authenticated user. There is no shared or cross-user access path.
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+Two details are load-bearing and easy to break:
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+- The Firestore database is named `default`, not the SDK's implicit
+  `(default)`. `app/firebase.ts` pins it explicitly. Without the pin, every
+  read and write targets a database that does not exist and retries forever,
+  so trips never load and sign-in appears to hang.
+- The client uses `persistentLocalCache`, so a returning sign-in paints from
+  IndexedDB while Firestore reconciles in the background. It falls back to the
+  memory-only cache where IndexedDB is unavailable (private browsing, or
+  multiple tabs without broadcast support).
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+Trips are also cached in `localStorage` per uid, and the newer of the local
+and cloud copies wins by `updatedAt`.
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+## Android app
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+`android/` holds a native Java client (`com.manavdesai.journeysync`,
+`minSdk 23`, `targetSdk 35`) that signs in with Google and reads and writes the
+same `users/{uid}/user_trips/all_trips` document as the web app, so itineraries,
+expenses, wallet documents, map pins, and travelers stay in sync across both.
 
-## Useful Commands
+For live flight data it calls the deployed `/api/flights/status` route with the
+signed-in user's Firebase ID token rather than talking to providers directly, so
+no provider key is ever packaged into the APK. The target host is baked in as
+the `FLIGHT_API_BASE_URL` build config field in `android/app/build.gradle.kts`
+and points at the deployed Worker; change it there to test against another
+environment.
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+There is no Gradle wrapper checked in. Open `android/` in Android Studio, sync
+Gradle, and run the `app` configuration. The `com.google.gms.google-services`
+plugin expects a `google-services.json` for the Firebase project. The debug
+signing key and build output are gitignored. See `android/README.md` for more.
 
-## Learn More
+## Deployment
 
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+Deploys to Cloudflare Workers using `wrangler.jsonc`. `worker/index.ts` is the
+entry point: it handles `/_vinext/image` through the Cloudflare Images binding
+and passes everything else to the vinext app router. Static assets are served
+from `dist/client` via the `ASSETS` binding.
+
+Server-only keys must be set as Worker secrets, not committed. Firestore rules
+deploy separately through `firebase.json`.
+
+## Tests
+
+`npm test` runs lint, typecheck, a production build, and then
+`tests/rendered-html.test.mjs`, which covers server rendering, geocoding, the
+weather fallback path, cache headers on the release endpoint, rejection of
+unauthenticated flight lookups, normalized flight results, and the Firestore
+rules isolation property.
+
+## Repo layout
+
+```
+app/          web app, API routes, Firebase client
+worker/       Cloudflare Worker entry point
+android/      native Android client
+db/           Drizzle schema (empty) and D1 helper
+public/       icons, OG image, PWA manifest
+tests/        integration tests
+examples/d1/  optional D1 example, not wired into the app
+design/       vendored design reference (zip)
+```
+
+`app/chatgpt-auth.ts` reads OpenAI workspace identity headers. It is leftover
+scaffolding from the project template and has no callers; authentication runs
+through Firebase.
