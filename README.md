@@ -194,7 +194,3 @@ tests/        integration tests
 examples/d1/  optional D1 example, not wired into the app
 design/       vendored design reference (zip)
 ```
-
-`app/chatgpt-auth.ts` reads OpenAI workspace identity headers. It is leftover
-scaffolding from the project template and has no callers; authentication runs
-through Firebase.
