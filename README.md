@@ -36,6 +36,47 @@ bundle, so a running dev server must be restarted after editing `.env.local`.
 If the placeholders are left in place, the app logs a configuration error and
 sign-in is disabled rather than failing silently.
 
+### Running without a Firebase project
+
+Every feature is behind sign-in, so without credentials a fresh clone reaches
+the sign-in screen and stops. The Firebase Emulator Suite gives you a working
+app with no real project and no secrets: accounts, trips and sync all run
+locally and are thrown away when you stop it.
+
+Needs a JDK on the path for the Firestore emulator.
+
+```bash
+npx firebase-tools emulators:start --only auth,firestore --project demo-journeysync
+```
+
+Then put this in `.env.local` and start the dev server in another terminal:
+
+```
+NEXT_PUBLIC_FIREBASE_API_KEY=demo-api-key
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=demo-journeysync.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-journeysync
+NEXT_PUBLIC_FIREBASE_APP_ID=1:1234567890:web:demolocal
+
+NEXT_PUBLIC_FIREBASE_EMULATOR_HOST=127.0.0.1:8080
+NEXT_PUBLIC_FIREBASE_DATABASE_ID=(default)
+```
+
+Register any email and password on the Register tab; the emulator accepts them
+without sending mail. Emulator UI is at http://127.0.0.1:4000 if you want to
+inspect the stored documents.
+
+Two variables drive this and both are opt-in, so leaving them unset keeps the
+deployed app on real Firebase:
+
+- `NEXT_PUBLIC_FIREBASE_EMULATOR_HOST` routes Auth and Firestore to the
+  emulators. Give it `host:port` for Firestore; Auth is assumed on 9099.
+- `NEXT_PUBLIC_FIREBASE_DATABASE_ID` overrides the database name. Production
+  pins `default` (see below); the emulator serves the SDK's implicit
+  `(default)`, so it needs the override.
+
+Weather and map geocoding still call live third-party APIs and are not
+emulated. Google sign-in needs a real project and will not work here.
+
 ## Environment variables
 
 Client values are inlined into the browser bundle and are safe to expose.
@@ -51,6 +92,8 @@ Server values must never be prefixed with `NEXT_PUBLIC_`.
 | `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | client | no | Firebase config |
 | `NEXT_PUBLIC_FIREBASE_DATABASE_URL` | client | no | Firebase config |
 | `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` | client | no | Firebase config |
+| `NEXT_PUBLIC_FIREBASE_EMULATOR_HOST` | client | no | Local dev only: routes Auth and Firestore to the emulators |
+| `NEXT_PUBLIC_FIREBASE_DATABASE_ID` | client | no | Overrides the Firestore database name; defaults to `default` |
 | `AERODATABOX_API_KEY` | server | no | Primary live flight provider |
 | `AERODATABOX_API_HOST` | server | no | Defaults to `aerodatabox.p.rapidapi.com` |
 | `AVIATIONSTACK_API_KEY` | server | no | Fallback live flight provider |

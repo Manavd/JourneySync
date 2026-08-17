@@ -182,6 +182,17 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
 .flight-time .on-time { color: var(--success-on-dark); font-size: 8px; margin-top: 5px; }
 .status-banner > button { border: 1px solid #43535f; color: white; background: transparent; border-radius: 5px; font-size: 9px; font-weight: 700; padding: 10px 12px; cursor: pointer; transition: background 0.15s; }
 .status-banner > button:hover { background: #263743; }
+/* Empty state. This used to be an inline background override on the navy rule
+   above, which left `color: white` in force: the headline and the button label
+   rendered white on a near-white panel and were invisible, on every trip with
+   no arrival pass yet. Only the two grey lines survived, which is why it read
+   as a half-empty box rather than an obvious bug. */
+.status-banner.empty { background: var(--paper); border: 1px dashed var(--line); color: var(--ink); box-shadow: none; }
+.status-banner.empty > div:nth-child(2) small { color: var(--muted); }
+.status-banner.empty > div:nth-child(2) strong { color: var(--ink); }
+.status-banner.empty > div:nth-child(2) span { color: var(--muted); }
+.status-banner.empty > button { border-color: var(--line); color: var(--ink); }
+.status-banner.empty > button:hover { background: var(--cream); }
 .status-banner > button span { display: inline; margin-left: 8px; color: var(--coral); }
 
 .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(275px, .7fr); gap: 38px; }
@@ -490,7 +501,9 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
   .dashboard-grid { grid-template-columns: 1fr; }
   .right-rail { grid-template-columns: repeat(3, 1fr); }
   .status-banner { grid-template-columns: 48px 1.3fr .9fr auto; }
-  .status-banner > button { display: none; }
+  /* "View details" is redundant on a narrow screen, but the empty state's
+     button is its only call to action, so it stays. */
+  .status-banner:not(.empty) > button { display: none; }
   .expenses-view-container { grid-template-columns: 1fr; }
 }
 

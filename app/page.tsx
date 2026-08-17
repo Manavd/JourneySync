@@ -2136,7 +2136,7 @@ export default function Home() {
         <div className="content">
           <div className="hero-row">
             <div>
-              <div className="eyebrow"><span /> {itineraryDays.length} DAYS · {tripTravelers} TRAVELER{tripTravelers === 1 ? "" : "S"}</div>
+              <div className="eyebrow"><span /> {itineraryDays.length} DAY{itineraryDays.length === 1 ? "" : "S"} · {tripTravelers} TRAVELER{tripTravelers === 1 ? "" : "S"}</div>
               <h1>{tripName}</h1>
               <p>{tripRoute}</p>
               <div className="trip-management-actions">
@@ -2176,7 +2176,7 @@ export default function Home() {
               <button onClick={() => mainArrivalEvent.kind === "flight" ? openFlightDetails(mainArrivalEvent.event || null) : setActiveNav("Itinerary")}>View details <span>→</span></button>
             </div>
           ) : (
-            <div className="status-banner" style={{ background: "#f8fafc", border: "1px dashed #cbd5e1" }}>
+            <div className="status-banner empty">
               <div className="status-symbol">✦</div>
               <div>
                 <small>NO ARRIVAL PASS YET</small>
@@ -2193,22 +2193,22 @@ export default function Home() {
               <div className="overview-cards">
                 <div className="overview-card">
                   <small>ITINERARY DURATION</small>
-                  <strong>{itineraryDays.length} Days</strong>
-                  <p>{itineraryDays.reduce((acc, d) => acc + d.events.length, 0)} Total Activities Planned</p>
+                  <strong>{itineraryDays.length} Day{itineraryDays.length === 1 ? "" : "s"}</strong>
+                  <p>{itineraryDays.reduce((acc, d) => acc + d.events.length, 0)} Total Activit{itineraryDays.reduce((acc, d) => acc + d.events.length, 0) === 1 ? "y" : "ies"} Planned</p>
                 </div>
                 <div className="overview-card">
                   <small>TOTAL EXPENSES</small>
                   <strong>{tripCurrency} {totalExpenseAmount.toFixed(2)}</strong>
-                  <p>Split across {travelersList.length} Travelers</p>
+                  <p>Split across {travelersList.length} Traveler{travelersList.length === 1 ? "" : "s"}</p>
                 </div>
                 <div className="overview-card">
                   <small>TRAVEL DOCUMENTS</small>
-                  <strong>{walletDocs.length} Passes</strong>
+                  <strong>{walletDocs.length} Pass{walletDocs.length === 1 ? "" : "es"}</strong>
                   <p>Boarding passes & hotel confirmations</p>
                 </div>
                 <div className="overview-card">
                   <small>TRAVEL TEAM</small>
-                  <strong>{travelersList.length} Members</strong>
+                  <strong>{travelersList.length} Member{travelersList.length === 1 ? "" : "s"}</strong>
                   <p>Organized by {user.displayName || user.email?.split("@")[0] || "you"}.</p>
                 </div>
               </div>
@@ -3182,7 +3182,7 @@ export default function Home() {
                 <div key={t.id} onClick={() => { setActiveTripId(t.id); setActiveDay(0); setPlannerOpen(null); notify(`Switched to "${t.name}"`); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", background: activeTripId === t.id ? "#fff7ed" : "#f8fafc", border: activeTripId === t.id ? "1.5px solid var(--coral)" : "1px solid var(--line)", borderRadius: "8px", cursor: "pointer" }}>
                   <div>
                     <strong style={{ fontSize: "13px", display: "block", color: activeTripId === t.id ? "var(--coral)" : "#0f172a" }}>{t.name} {activeTripId === t.id && "(Active)"}</strong>
-                    <small style={{ fontSize: "10px", color: "#64748b" }}>{t.route} · {t.days.length} Days · {t.travelersCount} Travelers</small>
+                    <small style={{ fontSize: "10px", color: "#64748b" }}>{t.route} · {t.days.length} Day{t.days.length === 1 ? "" : "s"} · {t.travelersCount} Traveler{t.travelersCount === 1 ? "" : "s"}</small>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                     {activeTrips.length > 0 && (

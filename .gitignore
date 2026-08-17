@@ -34,6 +34,12 @@ dev.log
 dev.*.log
 .npm-cache/
 firebase-debug.log
+# Firebase Emulator Suite output, written into the repo root on every run.
+firestore-debug.log
+database-debug.log
+pubsub-debug.log
+ui-debug.log
+.firebase/
 
 # env files (can opt-in for committing if needed)
 .env*
