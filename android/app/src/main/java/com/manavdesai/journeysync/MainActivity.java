@@ -74,22 +74,25 @@ import java.text.SimpleDateFormat;
 /** A native Android JourneySync experience backed by Firebase Authentication and Firestore with full website feature parity. */
 public class MainActivity extends android.app.Activity {
     private static final int RC_GOOGLE_SIGN_IN = 4021;
-    /** Shared JourneySync palette used by the current website. */
-    private static final String BLUE = "#89B8D8";
-    private static final String INK = "#1B2731";
-    private static final String SURFACE = "#FFFDF8";
-    private static final String CORAL = "#EF7159";
-    /** Darker coral used for the pressed state on filled buttons. */
-    private static final String CORAL_PRESSED = "#D85C45";
-    private static final String NAVY = "#17212B";
-    private static final String CREAM = "#F4F1EA";
-    private static final String MINT = "#B9DDC7";
-    private static final String GREEN = "#1D7A48";
-    private static final String ORANGE = "#D97706";
-    private static final String PURPLE = "#7C3AED";
-    private static final String MUTED = "#72808A";
-    private static final String FAINT = "#7B8990";
-    private static final String LINE = "#DEDBD2";
+    // The shared JourneySync palette. These are aliases, not values: every colour
+    // is defined once in design/tokens.json and generated into DesignTokens, so
+    // the website and this app cannot drift apart the way they did when the
+    // launcher blue was a red that appeared nowhere on the site. The short names
+    // stay because the screens below read better for them.
+    private static final String BLUE = DesignTokens.BLUE;
+    private static final String INK = DesignTokens.INK;
+    private static final String SURFACE = DesignTokens.SURFACE;
+    private static final String CORAL = DesignTokens.CORAL;
+    private static final String CORAL_PRESSED = DesignTokens.CORAL_PRESSED;
+    private static final String NAVY = DesignTokens.NAVY;
+    private static final String CREAM = DesignTokens.CREAM;
+    private static final String MINT = DesignTokens.MINT;
+    private static final String GREEN = DesignTokens.GREEN;
+    private static final String ORANGE = DesignTokens.ORANGE;
+    private static final String PURPLE = DesignTokens.PURPLE;
+    private static final String MUTED = DesignTokens.MUTED;
+    private static final String FAINT = DesignTokens.FAINT;
+    private static final String LINE = DesignTokens.LINE;
 
     private static final int SECTION_OVERVIEW = 0;
     private static final int SECTION_ITINERARY = 1;
@@ -2957,7 +2960,7 @@ public class MainActivity extends android.app.Activity {
     }
 
     /** Rounded corner radius shared by buttons and cards, matching the web UI. */
-    private static final int RADIUS_DP = 10;
+    private static final int RADIUS_DP = DesignTokens.RADIUS_DP;
 
     private GradientDrawable roundedFill(String fill, String stroke) {
         GradientDrawable shape = new GradientDrawable();

@@ -1,16 +1,10 @@
 @import "tailwindcss";
+/* Palette and radius come from design/tokens.json, shared with the Android app.
+   See design/README.md. Edit the tokens file, not the generated stylesheet. */
+@import "./design-tokens.css";
 
 :root {
-  --navy: #17212b;
-  --navy-2: #243240;
-  --ink: #1b2731;
-  --muted: #72808a;
-  --cream: #f4f1ea;
-  --paper: #fffdf8;
-  --line: #dedbd2;
-  --coral: #ef7159;
-  --mint: #b9ddc7;
-  --blue: #89b8d8;
+  /* Web-only: a CSS box-shadow has no Android counterpart to keep in step. */
   --shadow: 0 20px 60px rgba(29, 36, 39, 0.09);
 }
 
@@ -185,7 +179,7 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
 .flight-line b { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); color: #b6c4cc; background: var(--navy); padding: 0 4px; font-style: normal; }
 .flight-time { padding-left: 18px; border-left: 1px solid #354550; text-align: right; }
 .flight-time strong { font-size: 12px; }
-.flight-time .on-time { color: #73c994; font-size: 8px; margin-top: 5px; }
+.flight-time .on-time { color: var(--success-on-dark); font-size: 8px; margin-top: 5px; }
 .status-banner > button { border: 1px solid #43535f; color: white; background: transparent; border-radius: 5px; font-size: 9px; font-weight: 700; padding: 10px 12px; cursor: pointer; transition: background 0.15s; }
 .status-banner > button:hover { background: #263743; }
 .status-banner > button span { display: inline; margin-left: 8px; color: var(--coral); }
@@ -263,7 +257,7 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
 .balances p small { font-size: 7px; color: #89959b; }
 .balances b { font-size: 8px; }
 .balances .positive { color: #3b9460; }
-.balances .negative { color: #e53e3e; }
+.balances .negative { color: var(--danger); }
 .text-link { width: 100%; display: flex; justify-content: space-between; border: 0; background: transparent; padding: 8px 0 0; color: #65737b; font-size: 8px; font-weight: 700; cursor: pointer; transition: color 0.15s; }
 .text-link:hover { color: var(--ink); }
 .text-link span { color: var(--coral); }
@@ -317,7 +311,7 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
 .primary-action:active { transform: scale(0.98); }
 .secondary-action { width: 100%; border: 1px solid #d0d0d0; border-radius: 6px; background: transparent; color: #4a5568; padding: 11px; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 8px; transition: background 0.15s; }
 .secondary-action:hover { background: #eef2f5; }
-.danger-action { width: 100%; border: 0; border-radius: 6px; background: #e53e3e; color: white; padding: 11px; font-size: 10px; font-weight: 800; cursor: pointer; margin-top: 8px; transition: background 0.15s; }
+.danger-action { width: 100%; border: 0; border-radius: 6px; background: var(--danger); color: white; padding: 11px; font-size: 10px; font-weight: 800; cursor: pointer; margin-top: 8px; transition: background 0.15s; }
 .danger-action:hover { background: #c53030; }
 
 /* Auth Modal & Tabs */
@@ -471,7 +465,7 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
 .dropdown-menu { position: absolute; right: 0; top: 100%; margin-top: 6px; background: white; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); z-index: 30; width: 160px; padding: 4px; animation: popover-fade 0.12s ease-out; }
 .dropdown-item { width: 100%; border: 0; background: transparent; text-align: left; padding: 8px 12px; font-size: 10px; font-weight: 600; color: #334155; border-radius: 4px; cursor: pointer; transition: background 0.1s; }
 .dropdown-item:hover { background: #f1f5f9; }
-.dropdown-item.danger { color: #e53e3e; }
+.dropdown-item.danger { color: var(--danger); }
 .dropdown-item.danger:hover { background: #fef2f2; }
 
 /* Mobile Overlay Drawer */

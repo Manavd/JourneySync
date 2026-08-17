@@ -1,0 +1,23 @@
+/*
+ * Generated from design/tokens.json. Do not edit by hand.
+ * Run `npm run tokens` after changing that file.
+ */
+
+:root {
+  --navy: #17212b; /* navy */
+  --navy-2: #243240; /* navyRaised */
+  --ink: #1b2731; /* ink */
+  --muted: #72808a; /* muted */
+  --cream: #f4f1ea; /* cream */
+  --paper: #fffdf8; /* paper */
+  --line: #dedbd2; /* line */
+  --coral: #ef7159; /* coral */
+  --mint: #b9ddc7; /* mint */
+  --blue: #89b8d8; /* blue */
+  --success: #1d7a48; /* success */
+  --success-on-dark: #73c994; /* successOnDark */
+  --warning: #d97706; /* warning */
+  --accent: #7c3aed; /* accent */
+  --danger: #e53e3e; /* danger */
+  --radius-card: 10px; /* card */
+}

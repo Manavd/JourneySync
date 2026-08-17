@@ -2645,7 +2645,7 @@ export default function Home() {
                           {exp.currency} {exp.amount.toFixed(2)}
                           <small>Split {travelersList.length} ways</small>
                         </div>
-                        <button style={{ border: 0, background: "transparent", color: "#e53e3e", cursor: "pointer", fontSize: "14px" }} onClick={() => deleteExpense(exp.id)}>×</button>
+                        <button style={{ border: 0, background: "transparent", color: "var(--danger)", cursor: "pointer", fontSize: "14px" }} onClick={() => deleteExpense(exp.id)}>×</button>
                       </div>
                     </div>
                   ))}
@@ -2701,7 +2701,7 @@ export default function Home() {
                         navigator.clipboard.writeText(doc.code);
                         notify(`Copied ticket code: ${doc.code}`);
                       }}>Copy Code</button>
-                      <button style={{ color: "#e53e3e" }} onClick={() => deleteWalletDoc(doc.id)}>Delete</button>
+                      <button style={{ color: "var(--danger)" }} onClick={() => deleteWalletDoc(doc.id)}>Delete</button>
                     </div>
                   </div>
                 ))}
@@ -2983,7 +2983,7 @@ export default function Home() {
                     <small style={{ fontSize: "9px", color: "#64748b" }}>{t.email} · {t.role}</small>
                   </div>
                   {travelersList.length > 1 && (
-                    <button style={{ border: 0, background: "transparent", color: "#e53e3e", cursor: "pointer", fontSize: "13px" }} onClick={() => removeTraveler(t.email)} title="Remove traveler">×</button>
+                    <button style={{ border: 0, background: "transparent", color: "var(--danger)", cursor: "pointer", fontSize: "13px" }} onClick={() => removeTraveler(t.email)} title="Remove traveler">×</button>
                   )}
                 </div>
               ))}
