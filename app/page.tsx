@@ -170,6 +170,22 @@ type TripCache = {
   updatedAt: number;
 };
 
+/** Nominatim's usage policy allows at most one request per second. */
+const MAP_GEOCODE_INTERVAL_MS = 1100;
+
+// Firestore rejects any document larger than 1 MiB. The entire profile is a
+// single document, so once a trip library crosses that line every subsequent
+// write fails identically: the catch below logs to the console and the badge
+// stays unsynced forever, with nothing telling the traveler why or which trip
+// to trim. Checking first turns that into one actionable message. The budget
+// leaves headroom for field names and Firestore's own encoding overhead, which
+// the serialized payload does not account for.
+const PROFILE_PAYLOAD_BUDGET_BYTES = 900_000;
+
+function payloadByteLength(payload: string): number {
+  return new TextEncoder().encode(payload).length;
+}
+
 const EMPTY_DAYS: Day[] = [];
 const EMPTY_EXPENSES: Expense[] = [];
 const EMPTY_WALLET_DOCS: WalletDoc[] = [];
@@ -623,6 +639,7 @@ export default function Home() {
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState("");
   const mapGeocodeAttemptsRef = useRef(new Set<string>());
+  const lastMapGeocodeAtRef = useRef(0);
 
   // Auth Listener & Firestore Sync
   useEffect(() => {
@@ -750,6 +767,18 @@ export default function Home() {
           setOfflineCachedAt(cachedAt);
           setSynced(false);
         }
+        const payloadBytes = payloadByteLength(payload);
+        if (payloadBytes > PROFILE_PAYLOAD_BUDGET_BYTES) {
+          if (activeUidRef.current === user.uid && syncGenerationRef.current === generation) {
+            setSynced(false);
+            notify(
+              `This trip library is too large to sync (${Math.round(payloadBytes / 1024)} KB of a 1 MB limit). ` +
+              "Changes stay on this device. Archive or delete a trip to resume syncing.",
+            );
+          }
+          return;
+        }
+
         try {
           const docRef = doc(db, "users", user.uid, "user_trips", "all_trips");
           await setDoc(docRef, {
@@ -874,27 +903,44 @@ export default function Home() {
 
   // Older saved pins predate coordinate storage. Resolve them one at a time
   // when the map is opened, then let the normal profile sync persist them.
+  //
+  // Storing a resolved pin changes `mapPins`, which is a dependency here, so a
+  // successful lookup always restarts this effect and aborts the loop mid-flight.
+  // Every run therefore has to be safe to cut short at any point:
+  //
+  //   - An attempt is recorded only once its request is actually being sent.
+  //     Marking on entry meant an abort during the pacing delay retired that pin
+  //     for the rest of the session without ever having looked it up, so pins
+  //     after the first were silently skipped and never got coordinates.
+  //   - Pacing reads a timestamp that outlives the restart. The loop index resets
+  //     to 0 on every rerun, so gating the delay on `index > 0` let each restart
+  //     fire immediately and defeated Nominatim's one-request-per-second policy.
   useEffect(() => {
     if (activeNav !== "Map" || !activeTrip?.id) return;
+    const tripId = activeTrip.id;
     const missingPins = mapPins.filter((pin) =>
       typeof pin.latitude !== "number" || typeof pin.longitude !== "number",
-    ).filter((pin) => !mapGeocodeAttemptsRef.current.has(`${activeTrip.id}:${pin.name}`));
+    ).filter((pin) => !mapGeocodeAttemptsRef.current.has(`${tripId}:${pin.name}`));
     if (missingPins.length === 0) return;
 
     const controller = new AbortController();
     void (async () => {
-      for (const [index, pin] of missingPins.entries()) {
-        const attemptKey = `${activeTrip.id}:${pin.name}`;
-        mapGeocodeAttemptsRef.current.add(attemptKey);
-        if (index > 0) await new Promise((resolve) => window.setTimeout(resolve, 1100));
+      for (const pin of missingPins) {
+        const sinceLastLookup = Date.now() - lastMapGeocodeAtRef.current;
+        if (sinceLastLookup < MAP_GEOCODE_INTERVAL_MS) {
+          await new Promise((resolve) => window.setTimeout(resolve, MAP_GEOCODE_INTERVAL_MS - sinceLastLookup));
+        }
         if (controller.signal.aborted) return;
+
+        mapGeocodeAttemptsRef.current.add(`${tripId}:${pin.name}`);
+        lastMapGeocodeAtRef.current = Date.now();
         try {
           const location = [pin.name, tripCity, tripRegion, tripCountry].filter(Boolean).join(", ");
           const query = new URLSearchParams({ q: location, countryCode: inferredCountryCode });
           const response = await fetch(`/api/geocode?${query.toString()}`, { cache: "no-store", signal: controller.signal });
           const body = await response.json() as { latitude?: number; longitude?: number };
           if (!response.ok || typeof body.latitude !== "number" || typeof body.longitude !== "number") continue;
-          setSavedTrips((trips) => trips.map((trip) => trip.id === activeTrip.id ? {
+          setSavedTrips((trips) => trips.map((trip) => trip.id === tripId ? {
             ...trip,
             mapPins: trip.mapPins.map((savedPin) => savedPin.name === pin.name ? {
               ...savedPin,
