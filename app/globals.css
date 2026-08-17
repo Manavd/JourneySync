@@ -566,3 +566,32 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
 }
+
+/*
+  On a phone browser 100vh means the viewport with the URL bar retracted, which
+  is taller than what is actually on screen while that bar is showing. A 100vh
+  panel therefore runs off the bottom and buries whatever sits at its end: the
+  submit button on the sign-in panel, the row of actions in a modal. 100dvh
+  tracks the visible viewport instead and reflows as the bar slides away.
+
+  This has to be an @supports block rather than the usual pair of declarations
+  on one rule. The build minifies same-property declarations down to the last
+  one, which silently deleted every 100vh fallback and left browsers without
+  dvh support with no height bound at all - worst on modals, which lost their
+  max-height and so overflowed the screen with nothing to scroll. A conditional
+  group rule survives minification, so both values reach the browser.
+
+  Must stay last: these selectors also appear inside the max-width media queries
+  above, and matching specificity means source order decides.
+*/
+@supports (height: 100dvh) {
+  .auth-gate,
+  .auth-gate-intro,
+  .auth-gate-panel,
+  .trip-library-shell,
+  .app-shell,
+  .sidebar { min-height: 100dvh; }
+
+  .modal,
+  .flight-edit-modal { max-height: calc(100dvh - 40px); }
+}

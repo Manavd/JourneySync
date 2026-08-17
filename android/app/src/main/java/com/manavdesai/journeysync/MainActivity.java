@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -131,6 +132,12 @@ public class MainActivity extends android.app.Activity {
     private Runnable liveRefreshLoop;
     private ProgressBar authProgress;
 
+    private static final String STATE_ACTIVE_TRIP_ID = "journeysync.activeTripId";
+    private static final String STATE_ACTIVE_DAY_INDEX = "journeysync.activeDayIndex";
+    private static final String STATE_ACTIVE_SECTION = "journeysync.activeSection";
+    private static final String STATE_SHOWING_TRIP_LIBRARY = "journeysync.showingTripLibrary";
+    private static final String STATE_SHOW_ARCHIVED_TRIPS = "journeysync.showArchivedTrips";
+
     private final List<Trip> savedTrips = new ArrayList<>();
     private String activeTripId = "";
     private int activeDayIndex = 0;
@@ -168,7 +175,35 @@ public class MainActivity extends android.app.Activity {
                 .requestEmail()
                 .build();
         googleClient = GoogleSignIn.getClient(this, googleOptions);
+        restoreNavigationState(savedInstanceState);
         showCurrentState();
+    }
+
+    /**
+     * Rotation, unfolding, and entering multi-window all destroy and recreate the
+     * activity. Navigation state lives in plain fields, so without this the
+     * traveler is thrown back to the trip library and the Overview tab of the
+     * first trip every time the screen turns - the most common thing a device
+     * with a changing aspect ratio does. Only the small navigation cursor is
+     * saved; trip content itself is reloaded from Firestore and the local cache.
+     */
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putString(STATE_ACTIVE_TRIP_ID, activeTripId);
+        outState.putInt(STATE_ACTIVE_DAY_INDEX, activeDayIndex);
+        outState.putInt(STATE_ACTIVE_SECTION, activeSection);
+        outState.putBoolean(STATE_SHOWING_TRIP_LIBRARY, showingTripLibrary);
+        outState.putBoolean(STATE_SHOW_ARCHIVED_TRIPS, showArchivedTrips);
+    }
+
+    private void restoreNavigationState(Bundle savedInstanceState) {
+        if (savedInstanceState == null) return;
+        activeTripId = savedInstanceState.getString(STATE_ACTIVE_TRIP_ID, activeTripId);
+        activeDayIndex = savedInstanceState.getInt(STATE_ACTIVE_DAY_INDEX, activeDayIndex);
+        activeSection = savedInstanceState.getInt(STATE_ACTIVE_SECTION, activeSection);
+        showingTripLibrary = savedInstanceState.getBoolean(STATE_SHOWING_TRIP_LIBRARY, showingTripLibrary);
+        showArchivedTrips = savedInstanceState.getBoolean(STATE_SHOW_ARCHIVED_TRIPS, showArchivedTrips);
     }
 
     @Override
@@ -664,13 +699,20 @@ public class MainActivity extends android.app.Activity {
         }
         for (int i = 0; i < labels.length; i++) {
             final int section = sections[i];
-            nav.addView(navItem(glyphs[i], labels[i], section == selected, () -> {
+            LinearLayout item = navItem(glyphs[i], labels[i], section == selected, () -> {
                 activeSection = section;
                 renderDashboard(user);
-            }), new LinearLayout.LayoutParams(0, dp(66), 1));
+            });
+            item.setMinimumHeight(dp(66));
+            nav.addView(item, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         }
+        // The bar keeps its 68dp look on default settings but measures to its
+        // content, because the glyph and caption inside are sized in sp. Pinned
+        // to an exact height the tabs were cropped mid-glyph once a traveler
+        // raised the system font size.
+        nav.setMinimumHeight(dp(68));
         appRoot.addView(nav, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(68)));
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
     private void renderOverview(FirebaseUser user, Trip trip) {
@@ -875,7 +917,7 @@ public class MainActivity extends android.app.Activity {
             map.loadDataWithBaseURL("https://tile.openstreetmap.org/", tripMapHtml(located),
                     "text/html", "utf-8", null);
             LinearLayout.LayoutParams mapParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(240));
+                    LinearLayout.LayoutParams.MATCH_PARENT, tripMapHeightPx());
             mapParams.bottomMargin = dp(16);
             screen.addView(map, mapParams);
         }
@@ -2777,10 +2819,17 @@ public class MainActivity extends android.app.Activity {
 
         TextView icon = text(glyph, 17, selected ? CORAL : INK, true);
         icon.setGravity(Gravity.CENTER);
+        icon.setMaxLines(1);
         item.addView(icon, margins(0, 8, 0, 1));
         TextView caption = text(label, 9, selected ? CORAL : MUTED, true);
         caption.setGravity(Gravity.CENTER);
         caption.setLetterSpacing(.08f);
+        // Six tabs share the width, so a narrow screen leaves roughly 50dp each.
+        // Captions are sized in sp and grow with the system font scale, so
+        // without a single-line cap "Expenses" wrapped and was then clipped by
+        // the bar's fixed height. Ellipsizing keeps every tab on one readable row.
+        caption.setMaxLines(1);
+        caption.setEllipsize(TextUtils.TruncateAt.END);
         item.addView(caption);
         return item;
     }
@@ -2991,6 +3040,21 @@ public class MainActivity extends android.app.Activity {
         return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, getResources().getDisplayMetrics());
     }
 
+    /**
+     * Sizes the trip map against the viewport instead of pinning it to one dp
+     * value. A flat 240dp is about a third of a portrait phone but nearly the
+     * whole usable height of a landscape one, where it pushed the places list
+     * and the section heading entirely below the fold. The ceiling keeps
+     * portrait phones looking exactly as before; the floor keeps the map usable
+     * on short viewports and on tall system font scales that inflate everything
+     * stacked above it.
+     */
+    private int tripMapHeightPx() {
+        int viewportHeight = getResources().getDisplayMetrics().heightPixels;
+        int proportional = Math.round(viewportHeight * 0.34f);
+        return Math.max(dp(150), Math.min(proportional, dp(240)));
+    }
+
     /** Blocks repeat taps while a sign-in request is in flight. */
     private void setAuthBusy(boolean busy) {
         for (Button button : authButtons) {
@@ -3193,15 +3257,27 @@ public class MainActivity extends android.app.Activity {
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             int top;
             int bottom;
+            int left;
+            int right;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                // Union with the cutout: in landscape a notch sits on a side edge,
+                // where systemBars() alone reports nothing and the header slides
+                // under the camera housing.
+                android.graphics.Insets bars = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
                 top = bars.top;
                 bottom = bars.bottom;
+                left = bars.left;
+                right = bars.right;
             } else {
                 top = insets.getSystemWindowInsetTop();
                 bottom = insets.getSystemWindowInsetBottom();
+                left = insets.getSystemWindowInsetLeft();
+                right = insets.getSystemWindowInsetRight();
             }
-            view.setPadding(view.getPaddingLeft(), top, view.getPaddingRight(), bottom);
+            // Absolute rather than preserving the current left/right padding, so
+            // repeated inset passes stay idempotent.
+            view.setPadding(left, top, right, bottom);
             return insets;
         });
         root.requestApplyInsets();
