@@ -185,6 +185,8 @@ test("weather endpoint geocodes the selected city and returns a short-lived cach
         assert.equal(url.searchParams.get("temperature_unit"), "fahrenheit");
         assert.equal(url.searchParams.get("forecast_days"), "5");
         return Response.json({
+          timezone: "America/New_York",
+          utc_offset_seconds: -14400,
           daily_units: { temperature_2m_max: "°F" },
           daily: {
             time: ["2026-08-10"],
@@ -208,6 +210,8 @@ test("weather endpoint geocodes the selected city and returns a short-lived cach
     assert.equal(body.days[0].low, "73°F");
     assert.equal(body.days[0].rain, "12%");
     assert.equal(body.source, "Open-Meteo");
+    assert.equal(body.timeZone, "America/New_York");
+    assert.equal(body.utcOffsetSeconds, -14400);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -257,6 +261,7 @@ test("weather endpoint falls back to 7Timer when Open-Meteo forecast is unavaila
     assert.equal(body.days[0].low, "68°F");
     assert.equal(body.days[0].rain, "Expected");
     assert.equal(body.source, "7Timer");
+    assert.equal(body.timeZone, "America/Chicago");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -279,10 +284,15 @@ test("live flight endpoint rejects unauthenticated requests", async () => {
   assert.match(body.error, /sign in/i);
 });
 
-test("Firestore rules isolate each user's profile data", async () => {
+test("Firestore rules isolate profiles and restrict trip chats to listed account emails", async () => {
   const rules = await readFile(new URL("../firestore.rules", import.meta.url), "utf8");
   assert.match(rules, /request\.auth\s*!=\s*null/);
   assert.match(rules, /request\.auth\.uid\s*==\s*userId/);
+  assert.match(rules, /match \/trip_chats\/\{chatId\}/);
+  assert.match(rules, /request\.auth\.token\.email\.lower\(\)/);
+  assert.match(rules, /accountEmail\(\) in chat\.memberEmails/);
+  assert.match(rules, /senderUid == request\.auth\.uid/);
+  assert.match(rules, /allow update, delete: if false/);
   assert.doesNotMatch(rules, /allow\s+(?:read|write|read,\s*write)\s*:\s*if\s+true/);
 });
 
@@ -292,11 +302,19 @@ test("native Android app bundles its map UI and shares summaries safely", async 
     import.meta.url,
   ), "utf8");
   const manifest = await readFile(new URL("../android/app/src/main/AndroidManifest.xml", import.meta.url), "utf8");
+  const colors = await readFile(new URL("../android/app/src/main/res/values/colors.xml", import.meta.url), "utf8");
   const leaflet = await readFile(new URL("../android/app/src/main/assets/leaflet/leaflet.js", import.meta.url));
 
   assert.match(source, /file:\/\/\/android_asset\/leaflet\//);
   assert.match(source, /Intent\.ACTION_SEND/);
   assert.match(source, /FieldValue\.delete\(\)/);
+  assert.match(source, /whereArrayContains\("memberEmails"/);
+  assert.match(source, /collection\("messages"\)\.add\(payload\)/);
+  assert.match(source, /styleButton\(button, BLUE, BLUE_PRESSED, null, NAVY\)/);
+  assert.match(source, /renderWorldClockCard\(user, trip\)/);
+  assert.match(source, /text\("HOME", 13/);
+  assert.doesNotMatch(source, /text\("ATL", 13/);
+  assert.match(colors, /<color name="journeysync_blue">#89B8D8<\/color>/);
   assert.doesNotMatch(source, /unpkg\.com/);
   assert.match(manifest, /android:allowBackup="false"/);
   assert.ok(leaflet.byteLength > 100_000, "expected bundled Leaflet runtime");

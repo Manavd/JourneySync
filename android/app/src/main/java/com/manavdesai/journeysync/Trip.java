@@ -15,7 +15,7 @@ import java.util.Locale;
  */
 public class Trip {
     private static final String[] KNOWN_KEYS = {"id", "name", "route", "startDate", "endDate", "travelersCount",
-            "countryCode", "country", "regionCode", "region", "city", "currency", "archivedAt", "days",
+            "countryCode", "country", "regionCode", "region", "city", "currency", "timeZone", "archivedAt", "days",
             "expenses", "walletDocs", "mapPins", "travelersList", "guestFlights"};
 
     public String id;
@@ -29,6 +29,7 @@ public class Trip {
     public String region;
     public String city;
     public String currency;
+    public String timeZone;
     /** Non-empty only when the traveler manually archives this trip. */
     public String archivedAt;
     public int travelersCount;
@@ -73,6 +74,7 @@ public class Trip {
         trip.region = MapValues.str(map.get("region"), "");
         trip.city = MapValues.str(map.get("city"), "");
         trip.currency = MapValues.str(map.get("currency"), LocationData.country(trip.countryCode).currency);
+        trip.timeZone = MapValues.str(map.get("timeZone"), "");
         trip.archivedAt = MapValues.str(map.get("archivedAt"), "");
         trip.travelersCount = MapValues.integer(map.get("travelersCount"), 1);
         trip.days = new ArrayList<>();
@@ -107,6 +109,7 @@ public class Trip {
         map.put("region", region != null ? region : "");
         map.put("city", city != null ? city : "");
         map.put("currency", currency != null ? currency : "USD");
+        map.put("timeZone", timeZone != null ? timeZone : "");
         if (archivedAt != null && !archivedAt.trim().isEmpty()) map.put("archivedAt", archivedAt);
         else map.remove("archivedAt");
         map.put("travelersCount", travelersCount);

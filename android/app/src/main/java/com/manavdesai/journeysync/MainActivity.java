@@ -49,6 +49,7 @@ import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
+import com.google.firebase.firestore.Query;
 import com.google.firebase.firestore.SetOptions;
 
 import org.json.JSONArray;
@@ -63,9 +64,11 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -84,10 +87,12 @@ public class MainActivity extends android.app.Activity {
     // launcher blue was a red that appeared nowhere on the site. The short names
     // stay because the screens below read better for them.
     private static final String BLUE = DesignTokens.BLUE;
+    private static final String BLUE_PRESSED = DesignTokens.BLUE_PRESSED;
+    private static final String BLUE_SOFT = DesignTokens.BLUE_SOFT;
     private static final String INK = DesignTokens.INK;
     private static final String SURFACE = DesignTokens.SURFACE;
+    /** Coral is reserved for warnings and destructive actions. */
     private static final String CORAL = DesignTokens.CORAL;
-    private static final String CORAL_PRESSED = DesignTokens.CORAL_PRESSED;
     private static final String NAVY = DesignTokens.NAVY;
     private static final String CREAM = DesignTokens.CREAM;
     private static final String MINT = DesignTokens.MINT;
@@ -130,6 +135,7 @@ public class MainActivity extends android.app.Activity {
     private GoogleSignInClient googleClient;
     private LinearLayout appRoot;
     private LinearLayout screen;
+    private ScrollView mainScroll;
     private WebView mapWebView;
 
     private final List<Button> authButtons = new ArrayList<>();
@@ -154,6 +160,15 @@ public class MainActivity extends android.app.Activity {
     private boolean showArchivedTrips = false;
     private final Map<String, WeatherSnapshot> weatherByTrip = new HashMap<>();
     private final Set<String> weatherLoading = new HashSet<>();
+    private HomeLocation homeLocation;
+    private ListenerRegistration homeLocationListener;
+    private final Handler clockHandler = new Handler(Looper.getMainLooper());
+    private Runnable clockLoop;
+    private TextView homeClockTime;
+    private TextView homeClockDate;
+    private TextView destinationClockTime;
+    private TextView destinationClockDate;
+    private TextView clockDifference;
 
     /**
      * The uid whose screen is currently on display, so returning to the
@@ -163,6 +178,15 @@ public class MainActivity extends android.app.Activity {
     private String renderedUid;
     private boolean tripsLoaded;
     private ListenerRegistration tripsListener;
+    private ListenerRegistration chatGroupsListener;
+    private ListenerRegistration chatMessagesListener;
+    private final List<TripChat> tripChats = new ArrayList<>();
+    private final List<TripChat.Message> chatMessages = new ArrayList<>();
+    private final Map<String, String> chatMetadataSignatures = new HashMap<>();
+    private String selectedChatId = "";
+    private String listeningChatId = "";
+    private boolean chatOpenedFromTrip;
+    private LinearLayout chatMessageList;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -228,11 +252,15 @@ public class MainActivity extends android.app.Activity {
         if (user != null && tripsLoaded && activeSection == SECTION_FLIGHTS && trip != null) {
             scheduleFlightRefresh(trip.trackedFlights());
         }
+        if (user != null && tripsLoaded && activeSection == SECTION_OVERVIEW && trip != null) {
+            scheduleClockUpdates();
+        }
     }
 
     @Override
     protected void onPause() {
         stopFlightRefreshLoop();
+        stopClockUpdates();
         super.onPause();
     }
 
@@ -244,6 +272,9 @@ public class MainActivity extends android.app.Activity {
             tripsListener.remove();
             tripsListener = null;
         }
+        stopChatListeners();
+        stopHomeLocationListener();
+        stopClockUpdates();
         super.onDestroy();
     }
 
@@ -265,6 +296,12 @@ public class MainActivity extends android.app.Activity {
             showingTripLibrary = true;
             showArchivedTrips = false;
             tripsLoaded = false;
+            selectedChatId = "";
+            tripChats.clear();
+            chatMetadataSignatures.clear();
+            stopChatListeners();
+            stopHomeLocationListener();
+            homeLocation = null;
         }
         if (user == null) {
             showLogin();
@@ -279,15 +316,15 @@ public class MainActivity extends android.app.Activity {
         appRoot.setOrientation(LinearLayout.VERTICAL);
         appRoot.setBackgroundColor(Color.parseColor(SURFACE));
         applySystemBarInsets(appRoot);
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
+        mainScroll = new ScrollView(this);
+        mainScroll.setFillViewport(true);
         screen = new LinearLayout(this);
         screen.setOrientation(LinearLayout.VERTICAL);
         screen.setPadding(dp(20), dp(20), dp(20), dp(32));
         screen.setBackgroundColor(Color.parseColor(SURFACE));
-        scroll.addView(screen, new ScrollView.LayoutParams(
+        mainScroll.addView(screen, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
-        appRoot.addView(scroll, new LinearLayout.LayoutParams(
+        appRoot.addView(mainScroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(appRoot);
     }
@@ -297,68 +334,116 @@ public class MainActivity extends android.app.Activity {
             tripsListener.remove();
             tripsListener = null;
         }
+        stopChatListeners();
+        stopHomeLocationListener();
+        stopClockUpdates();
+        homeLocation = null;
         prepareScreen();
-        // Dark icons: with insets applied the status bar sits on the cream
-        // surface rather than on the navy hero, so white icons were invisible.
         setLightStatusBar(true);
         renderedUid = null;
         tripsLoaded = false;
         showingTripLibrary = true;
         showArchivedTrips = false;
+        selectedChatId = "";
         savedTrips.clear();
+        tripChats.clear();
+        chatMessages.clear();
+        chatMetadataSignatures.clear();
         weatherByTrip.clear();
         authButtons.clear();
 
         LinearLayout hero = new LinearLayout(this);
         hero.setOrientation(LinearLayout.VERTICAL);
-        hero.setPadding(dp(20), dp(28), dp(20), dp(28));
-        hero.setBackgroundColor(Color.parseColor(NAVY));
-        hero.addView(text("JOURNEYSYNC", 13, "#FFFFFF", true));
-        hero.addView(text("Every plan.\nEvery person.\nOne journey.", 32, "#FFFFFF", true), margins(0, 14, 0, 0));
-        screen.addView(hero, margins(-20, -20, -20, 30));
+        hero.setPadding(dp(22), dp(22), dp(22), dp(24));
+        GradientDrawable heroBackground = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.parseColor(NAVY), Color.parseColor("#29485D"), Color.parseColor("#477895")});
+        heroBackground.setCornerRadius(dp(22));
+        hero.setBackground(heroBackground);
 
-        TextView heading = text("SIGN IN", 12, INK, true);
+        LinearLayout brandRow = new LinearLayout(this);
+        brandRow.setOrientation(LinearLayout.HORIZONTAL);
+        brandRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView brandMark = text("J", 20, NAVY, true);
+        brandMark.setGravity(Gravity.CENTER);
+        brandMark.setBackground(roundedFill(BLUE, null));
+        brandRow.addView(brandMark, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        LinearLayout brandCopy = new LinearLayout(this);
+        brandCopy.setOrientation(LinearLayout.VERTICAL);
+        brandCopy.addView(text("JourneySync", 18, "#FFFFFF", true));
+        brandCopy.addView(text("PLAN  ·  CHAT  ·  TRAVEL", 9, "#BFD1DC", true), margins(0, 2, 0, 0));
+        brandRow.addView(brandCopy, margins(11, 0, 0, 0));
+        hero.addView(brandRow);
+
+        TextView headline = text("Your whole trip,\nfinally in sync.", 29, "#FFFFFF", true);
+        hero.addView(headline, margins(0, 24, 0, 9));
+        hero.addView(text("Build the plan, follow live travel details, and talk with your group from every device.",
+                14, "#D4E0E6", false));
+
+        LinearLayout route = new LinearLayout(this);
+        route.setOrientation(LinearLayout.HORIZONTAL);
+        route.setGravity(Gravity.CENTER_VERTICAL);
+        route.setPadding(dp(13), dp(10), dp(13), dp(10));
+        route.setBackground(roundedFill("#203847", "#52758B"));
+        route.addView(text("HOME", 13, "#FFFFFF", true));
+        TextView routeLine = text("· · · · ·", 15, BLUE, true);
+        routeLine.setGravity(Gravity.CENTER);
+        route.addView(routeLine, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        route.addView(text("NEXT TRIP", 11, "#FFFFFF", true));
+        hero.addView(route, margins(0, 19, 0, 0));
+        screen.addView(hero, margins(0, 0, 0, 16));
+
+        LinearLayout signInCard = card();
+        signInCard.setPadding(dp(20), dp(20), dp(20), dp(20));
+        TextView heading = text("WELCOME BACK", 11, BLUE_PRESSED, true);
         heading.setLetterSpacing(.12f);
-        screen.addView(heading, margins(0, 0, 0, 8));
-        screen.addView(text("Your trips stay synced across JourneySync web and Android.", 15, MUTED, false), margins(0, 0, 0, 24));
+        signInCard.addView(heading);
+        signInCard.addView(text("Sign in to your journeys", 25, INK, true), margins(0, 6, 0, 5));
+        signInCard.addView(text("Your trips and group conversations stay synced with Firebase.", 13, MUTED, false), margins(0, 0, 0, 18));
 
-        EditText email = input("Email address", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS, "");
-        EditText password = input("Password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD, "");
-        screen.addView(text("EMAIL ADDRESS", 11, FAINT, true));
-        screen.addView(email, margins(0, 2, 0, 14));
-        screen.addView(text("PASSWORD", 11, FAINT, true));
-        screen.addView(password, margins(0, 2, 0, 20));
+        EditText email = input("you@example.com", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS, "");
+        EditText password = input("Your password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD, "");
+        signInCard.addView(text("EMAIL ADDRESS", 10, FAINT, true));
+        signInCard.addView(email, margins(0, 4, 0, 13));
+        signInCard.addView(text("PASSWORD", 10, FAINT, true));
+        signInCard.addView(password, margins(0, 4, 0, 17));
 
         Button signIn = primaryButton("Sign in with email");
         signIn.setOnClickListener(v -> emailSignIn(email, password, false));
-        screen.addView(signIn, margins(0, 0, 0, 10));
+        signInCard.addView(signIn, margins(0, 0, 0, 9));
 
         Button createAccount = outlineButton("Create an account");
         createAccount.setOnClickListener(v -> emailSignIn(email, password, true));
-        screen.addView(createAccount, margins(0, 0, 0, 24));
+        signInCard.addView(createAccount, margins(0, 0, 0, 18));
 
-        TextView divider = text("OR", 12, FAINT, true);
+        TextView divider = text("OR CONTINUE WITH", 10, FAINT, true);
         divider.setGravity(Gravity.CENTER);
-        screen.addView(divider, margins(0, 0, 0, 18));
+        signInCard.addView(divider, margins(0, 0, 0, 12));
 
         Button google = outlineButton("Continue with Google");
         google.setOnClickListener(v -> {
             setAuthBusy(true);
             startActivityForResult(googleClient.getSignInIntent(), RC_GOOGLE_SIGN_IN);
         });
-        screen.addView(google);
+        signInCard.addView(google);
 
         authProgress = new ProgressBar(this);
         authProgress.setVisibility(View.GONE);
-        screen.addView(authProgress, margins(0, 16, 0, 0));
+        signInCard.addView(authProgress, margins(0, 14, 0, 0));
+        screen.addView(signInCard, margins(0, 0, 0, 14));
+
+        LinearLayout features = new LinearLayout(this);
+        features.setOrientation(LinearLayout.HORIZONTAL);
+        features.addView(loginFeature("LIVE", "Flights + weather"), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        LinearLayout.LayoutParams middleFeature = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        middleFeature.setMargins(dp(7), 0, dp(7), 0);
+        features.addView(loginFeature("SHARED", "Group chat"), middleFeature);
+        features.addView(loginFeature("SYNCED", "Web + Android"), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        screen.addView(features);
 
         authButtons.add(signIn);
         authButtons.add(createAccount);
         authButtons.add(google);
-
-        TextView help = text("REAL FIREBASE LOGIN  ·  CLOUD-SYNCED TRIPS", 11, FAINT, true);
-        help.setGravity(Gravity.CENTER);
-        screen.addView(help, margins(0, 24, 0, 0));
     }
 
     private void emailSignIn(EditText emailView, EditText passwordView, boolean create) {
@@ -439,6 +524,165 @@ public class MainActivity extends android.app.Activity {
         return firestore.collection("users").document(user.getUid())
                 .collection("user_trips").document("all_trips");
     }
+    private DocumentReference homeLocationDoc(FirebaseUser user) {
+        return firestore.collection("users").document(user.getUid())
+                .collection("profile").document("home");
+    }
+
+    private void stopHomeLocationListener() {
+        if (homeLocationListener != null) {
+            homeLocationListener.remove();
+            homeLocationListener = null;
+        }
+    }
+
+    private void listenForHomeLocation(FirebaseUser user) {
+        stopHomeLocationListener();
+        homeLocationListener = homeLocationDoc(user).addSnapshotListener((snapshot, error) -> {
+            if (!user.getUid().equals(renderedUid)) return;
+            if (error != null) {
+                if (homeLocation == null) homeLocation = HomeLocation.inferredFromDevice();
+                updateClockViews();
+                return;
+            }
+            HomeLocation stored = snapshot != null && snapshot.exists()
+                    ? HomeLocation.fromMap(snapshot.getData()) : null;
+            if (stored == null) {
+                stored = HomeLocation.inferredFromDevice();
+                Map<String, Object> payload = stored.toMap();
+                payload.put("updatedAt", FieldValue.serverTimestamp());
+                homeLocationDoc(user).set(payload, SetOptions.merge());
+            }
+            homeLocation = stored;
+            if (!showingTripLibrary && activeSection == SECTION_OVERVIEW && tripsLoaded) renderDashboard(user);
+            else updateClockViews();
+        });
+    }
+    private DocumentReference tripChatDoc(String chatId) {
+        return firestore.collection("trip_chats").document(chatId);
+    }
+
+    private List<String> chatMemberEmails(FirebaseUser user, Trip trip) {
+        LinkedHashSet<String> emails = new LinkedHashSet<>();
+        String ownerEmail = normalizedEmail(user == null ? null : user.getEmail());
+        if (ownerEmail.contains("@")) emails.add(ownerEmail);
+        if (trip != null && trip.travelersList != null) {
+            for (Traveler traveler : trip.travelersList) {
+                String email = normalizedEmail(traveler == null ? null : traveler.email);
+                if (email.contains("@")) emails.add(email);
+                if (emails.size() >= 50) break;
+            }
+        }
+        return new ArrayList<>(emails);
+    }
+
+    private Map<String, Object> tripChatPayload(FirebaseUser user, Trip trip) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("tripId", safeText(trip == null ? null : trip.id, ""));
+        payload.put("tripName", safeText(trip == null ? null : trip.name, "Untitled trip"));
+        payload.put("tripRoute", safeText(trip == null ? null : trip.route, ""));
+        payload.put("ownerUid", user.getUid());
+        payload.put("ownerEmail", normalizedEmail(user.getEmail()));
+        payload.put("memberEmails", chatMemberEmails(user, trip));
+        payload.put("updatedAt", FieldValue.serverTimestamp());
+        return payload;
+    }
+
+    private String tripChatSignature(FirebaseUser user, Trip trip) {
+        return safeText(trip == null ? null : trip.name, "") + "\n"
+                + safeText(trip == null ? null : trip.route, "") + "\n"
+                + android.text.TextUtils.join("|", chatMemberEmails(user, trip));
+    }
+
+    private void syncTripChats(FirebaseUser user) {
+        if (user == null || !normalizedEmail(user.getEmail()).contains("@")) return;
+        for (Trip trip : savedTrips) {
+            if (trip == null || trip.id == null || trip.id.trim().isEmpty()) continue;
+            final String signatureKey = user.getUid() + ":" + trip.id;
+            final String signature = tripChatSignature(user, trip);
+            if (signature.equals(chatMetadataSignatures.get(signatureKey))) continue;
+            chatMetadataSignatures.put(signatureKey, signature);
+            tripChatDoc(trip.id).set(tripChatPayload(user, trip), SetOptions.merge())
+                    .addOnFailureListener(error -> chatMetadataSignatures.remove(signatureKey));
+        }
+    }
+
+    private void listenForTripChats(FirebaseUser user) {
+        if (chatGroupsListener != null) {
+            chatGroupsListener.remove();
+            chatGroupsListener = null;
+        }
+        String email = normalizedEmail(user == null ? null : user.getEmail());
+        if (!email.contains("@")) {
+            tripChats.clear();
+            return;
+        }
+        chatGroupsListener = firestore.collection("trip_chats")
+                .whereArrayContains("memberEmails", email)
+                .addSnapshotListener((snapshot, error) -> {
+                    if (user == null || !user.getUid().equals(renderedUid)) return;
+                    if (error != null || snapshot == null) return;
+                    tripChats.clear();
+                    for (com.google.firebase.firestore.DocumentSnapshot document : snapshot.getDocuments()) {
+                        TripChat chat = TripChat.fromDocument(document);
+                        if (chat != null) tripChats.add(chat);
+                    }
+                    Collections.sort(tripChats, (left, right) -> {
+                        int updated = Long.compare(right.updatedAt, left.updatedAt);
+                        return updated != 0 ? updated : safeText(left.tripName, "").compareToIgnoreCase(safeText(right.tripName, ""));
+                    });
+                    if (selectedChatId.isEmpty() && showingTripLibrary && tripsLoaded) renderTripLibrary(user);
+                });
+    }
+
+    private TripChat localTripChat(FirebaseUser user, Trip trip) {
+        TripChat chat = new TripChat();
+        chat.id = safeText(trip == null ? null : trip.id, "");
+        chat.tripName = safeText(trip == null ? null : trip.name, "Untitled trip");
+        chat.tripRoute = safeText(trip == null ? null : trip.route, "");
+        chat.ownerUid = user == null ? "" : user.getUid();
+        chat.ownerEmail = normalizedEmail(user == null ? null : user.getEmail());
+        chat.memberEmails = chatMemberEmails(user, trip);
+        return chat;
+    }
+
+    private TripChat findTripChat(FirebaseUser user, String chatId) {
+        for (TripChat chat : tripChats) if (chat != null && chatId.equals(chat.id)) return chat;
+        Trip ownedTrip = findTrip(chatId);
+        return ownedTrip == null ? null : localTripChat(user, ownedTrip);
+    }
+
+    private List<TripChat> availableTripChats(FirebaseUser user) {
+        List<TripChat> rooms = new ArrayList<>(tripChats);
+        Set<String> knownIds = new HashSet<>();
+        for (TripChat room : rooms) if (room != null) knownIds.add(room.id);
+        for (Trip trip : savedTrips) {
+            if (trip != null && !knownIds.contains(trip.id)) rooms.add(localTripChat(user, trip));
+        }
+        Collections.sort(rooms, (left, right) -> {
+            int updated = Long.compare(right.updatedAt, left.updatedAt);
+            return updated != 0 ? updated : safeText(left.tripName, "").compareToIgnoreCase(safeText(right.tripName, ""));
+        });
+        return rooms;
+    }
+
+    private void stopChatMessageListener() {
+        if (chatMessagesListener != null) {
+            chatMessagesListener.remove();
+            chatMessagesListener = null;
+        }
+        listeningChatId = "";
+        chatMessages.clear();
+        chatMessageList = null;
+    }
+
+    private void stopChatListeners() {
+        stopChatMessageListener();
+        if (chatGroupsListener != null) {
+            chatGroupsListener.remove();
+            chatGroupsListener = null;
+        }
+    }
 
     private SharedPreferences uiPreferences() {
         return getSharedPreferences("journeysync_ui", MODE_PRIVATE);
@@ -460,6 +704,8 @@ public class MainActivity extends android.app.Activity {
 
     private void loadTrips(FirebaseUser user) {
         if (tripsListener != null) tripsListener.remove();
+        listenForHomeLocation(user);
+        listenForTripChats(user);
         tripsListener = allTripsDoc(user).addSnapshotListener((snapshot, error) -> {
             if (!user.getUid().equals(renderedUid)) return;
             if (error != null) {
@@ -490,6 +736,7 @@ public class MainActivity extends android.app.Activity {
                 Trip active = findTrip(activeTripId);
                 if (active == null) activeTripId = savedTrips.get(0).id;
             }
+            syncTripChats(user);
             renderCurrentView(user);
             saveActiveTripSelection(user);
         });
@@ -506,6 +753,7 @@ public class MainActivity extends android.app.Activity {
         payload.put("updatedAt", System.currentTimeMillis());
         allTripsDoc(user).set(payload, SetOptions.merge())
                 .addOnFailureListener(error -> toast("Could not sync changes to cloud yet."));
+        syncTripChats(user);
     }
 
     /** Re-renders the dashboard and pushes the change to Firestore. */
@@ -515,7 +763,8 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void renderCurrentView(FirebaseUser user) {
-        if (showingTripLibrary) renderTripLibrary(user);
+        if (!selectedChatId.isEmpty()) renderChatScreen(user);
+        else if (showingTripLibrary) renderTripLibrary(user);
         else renderDashboard(user);
     }
 
@@ -553,7 +802,7 @@ public class MainActivity extends android.app.Activity {
         heading.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout title = new LinearLayout(this);
         title.setOrientation(LinearLayout.VERTICAL);
-        title.addView(text("JOURNEYSYNC", 12, CORAL, true));
+        title.addView(text("JOURNEYSYNC", 12, BLUE_PRESSED, true));
         title.addView(text("Your trips", 31, NAVY, true), margins(0, 5, 0, 2));
         title.addView(text("Saved to " + safeEmail(user), 13, MUTED, false));
         heading.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
@@ -635,10 +884,206 @@ public class MainActivity extends android.app.Activity {
             empty.addView(text(showArchivedTrips ? "Completed and manually archived trips will appear here." : "Create a trip to start planning.", 14, MUTED, false), margins(0, 6, 0, 0));
             screen.addView(empty);
         }
+
+        List<TripChat> rooms = availableTripChats(user);
+        screen.addView(sectionLabel("GROUP CHATS"), margins(0, 24, 0, 8));
+        if (rooms.isEmpty()) {
+            LinearLayout chatEmpty = card();
+            chatEmpty.setBackground(roundedFill(BLUE_SOFT, "#B9D4E5"));
+            chatEmpty.addView(text("No conversations yet", 18, NAVY, true));
+            chatEmpty.addView(text("Add traveler account emails to a trip to create its secure chat.", 12, MUTED, false), margins(0, 5, 0, 0));
+            screen.addView(chatEmpty);
+        } else {
+            for (TripChat room : rooms) {
+                int memberCount = room.memberEmails == null ? 0 : room.memberEmails.size();
+                screen.addView(sectionLink(safeText(room.tripName, "Trip chat"),
+                        safeText(room.tripRoute, "Trip group") + " · " + memberCount + " members",
+                        () -> openTripChat(user, room.id, false)), margins(0, 0, 0, 8));
+            }
+        }
+    }
+
+    private void openTripChat(FirebaseUser user, String chatId, boolean fromTrip) {
+        if (user == null || chatId == null || chatId.trim().isEmpty()) return;
+        stopChatMessageListener();
+        Trip ownedTrip = findTrip(chatId);
+        if (ownedTrip != null) syncTripChats(user);
+        selectedChatId = chatId;
+        chatOpenedFromTrip = fromTrip;
+        renderChatScreen(user);
+        listenToChatMessages(user, chatId);
+    }
+
+    private void closeTripChat(FirebaseUser user) {
+        boolean returnToTrip = chatOpenedFromTrip && getActiveTrip() != null;
+        selectedChatId = "";
+        chatOpenedFromTrip = false;
+        stopChatMessageListener();
+        showingTripLibrary = !returnToTrip;
+        if (returnToTrip) renderDashboard(user);
+        else renderTripLibrary(user);
+    }
+
+    private void listenToChatMessages(FirebaseUser user, String chatId) {
+        if (chatMessagesListener != null) chatMessagesListener.remove();
+        listeningChatId = chatId;
+        chatMessages.clear();
+        renderChatMessages(user);
+        chatMessagesListener = tripChatDoc(chatId).collection("messages")
+                .orderBy("createdAt", Query.Direction.ASCENDING)
+                .limitToLast(200)
+                .addSnapshotListener((snapshot, error) -> {
+                    if (!chatId.equals(selectedChatId) || !user.getUid().equals(renderedUid)) return;
+                    if (error != null) {
+                        toast("Messages could not load. Check this account is listed on the trip.");
+                        return;
+                    }
+                    chatMessages.clear();
+                    if (snapshot != null) {
+                        for (com.google.firebase.firestore.DocumentSnapshot document : snapshot.getDocuments()) {
+                            TripChat.Message message = TripChat.Message.fromDocument(document);
+                            if (message != null) chatMessages.add(message);
+                        }
+                    }
+                    renderChatMessages(user);
+                });
+    }
+
+    private void renderChatScreen(FirebaseUser user) {
+        releaseMapWebView();
+        screen.removeAllViews();
+        while (appRoot != null && appRoot.getChildCount() > 1) appRoot.removeViewAt(1);
+        stopFlightRefreshLoop();
+        TripChat chat = findTripChat(user, selectedChatId);
+        if (chat == null) {
+            selectedChatId = "";
+            showingTripLibrary = true;
+            renderTripLibrary(user);
+            return;
+        }
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        Button back = outlineButton("← Back");
+        back.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        back.setOnClickListener(v -> closeTripChat(user));
+        top.addView(back);
+        LinearLayout title = new LinearLayout(this);
+        title.setOrientation(LinearLayout.VERTICAL);
+        title.addView(text("LIVE GROUP CHAT", 10, BLUE_PRESSED, true));
+        title.addView(text(safeText(chat.tripName, "Trip chat"), 24, NAVY, true), margins(0, 4, 0, 2));
+        title.addView(text(safeText(chat.tripRoute, "Trip group"), 12, MUTED, false));
+        top.addView(title, margins(13, 0, 0, 0));
+        screen.addView(top, margins(0, 0, 0, 16));
+
+        LinearLayout access = new LinearLayout(this);
+        access.setOrientation(LinearLayout.VERTICAL);
+        access.setPadding(dp(14), dp(12), dp(14), dp(12));
+        access.setBackground(roundedFill(BLUE_SOFT, "#B9D4E5"));
+        int members = chat.memberEmails == null ? 0 : chat.memberEmails.size();
+        access.addView(text("●  FIRESTORE LIVE  ·  " + members + " MEMBER" + (members == 1 ? "" : "S"), 10, GREEN, true));
+        access.addView(text("Only the organizer and listed traveler account emails can read or send messages.", 12, MUTED, false), margins(0, 4, 0, 0));
+        screen.addView(access, margins(0, 0, 0, 14));
+
+        chatMessageList = new LinearLayout(this);
+        chatMessageList.setOrientation(LinearLayout.VERTICAL);
+        chatMessageList.setMinimumHeight(dp(330));
+        chatMessageList.setPadding(dp(2), dp(8), dp(2), dp(8));
+        screen.addView(chatMessageList, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        renderChatMessages(user);
+
+        LinearLayout composer = card();
+        composer.addView(text("MESSAGE THE GROUP", 10, FAINT, true), margins(0, 0, 0, 7));
+        EditText messageInput = input("Share an update, question, or meetup plan",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE, "");
+        messageInput.setSingleLine(false);
+        messageInput.setMinLines(2);
+        messageInput.setMaxLines(4);
+        composer.addView(messageInput, margins(0, 0, 0, 9));
+        Button send = primaryButton("Send message");
+        send.setOnClickListener(v -> sendChatMessage(user, chat, messageInput, send));
+        composer.addView(send);
+        composer.addView(text("Visible in real time on JourneySync web and Android.", 10, FAINT, false), margins(0, 8, 0, 0));
+        screen.addView(composer, margins(0, 14, 0, 0));
+    }
+
+    private void renderChatMessages(FirebaseUser user) {
+        if (chatMessageList == null) return;
+        chatMessageList.removeAllViews();
+        if (chatMessages.isEmpty()) {
+            LinearLayout welcome = card();
+            welcome.setBackground(roundedFill(BLUE_SOFT, "#B9D4E5"));
+            welcome.addView(text("Start the trip conversation", 20, NAVY, true));
+            welcome.addView(text("Messages appear here instantly for every listed traveler.", 13, MUTED, false), margins(0, 5, 0, 0));
+            chatMessageList.addView(welcome, margins(0, 30, 0, 30));
+            return;
+        }
+        SimpleDateFormat time = new SimpleDateFormat("h:mm a", Locale.US);
+        for (TripChat.Message message : chatMessages) {
+            if (message == null) continue;
+            boolean mine = user.getUid().equals(message.senderUid);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(mine ? Gravity.END : Gravity.START);
+
+            LinearLayout bubble = new LinearLayout(this);
+            bubble.setOrientation(LinearLayout.VERTICAL);
+            bubble.setPadding(dp(13), dp(10), dp(13), dp(10));
+            bubble.setBackground(roundedFill(mine ? BLUE_SOFT : SURFACE, mine ? "#9FC5DE" : LINE));
+            TextView sender = text(mine ? "YOU" : safeText(message.senderName, "TRAVELER"), 9, mine ? BLUE_PRESSED : FAINT, true);
+            bubble.addView(sender);
+            TextView body = text(safeText(message.text, ""), 14, INK, false);
+            body.setMaxWidth(dp(280));
+            bubble.addView(body, margins(0, 4, 0, 4));
+            bubble.addView(text(message.createdAt > 0 ? time.format(new Date(message.createdAt)) : "SENDING", 9, FAINT, false));
+            row.addView(bubble);
+            chatMessageList.addView(row, margins(0, 0, 0, 10));
+        }
+        if (mainScroll != null) mainScroll.post(() -> mainScroll.fullScroll(View.FOCUS_DOWN));
+    }
+
+    private void sendChatMessage(FirebaseUser user, TripChat chat, EditText input, Button send) {
+        String body = input.getText().toString().trim();
+        if (body.isEmpty()) {
+            toast("Write a message first.");
+            return;
+        }
+        if (body.length() > 1000) {
+            toast("Keep messages under 1,000 characters.");
+            return;
+        }
+        String email = normalizedEmail(user.getEmail());
+        if (!email.contains("@")) {
+            toast("This Firebase account needs an email address for group chat.");
+            return;
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("text", body);
+        payload.put("senderUid", user.getUid());
+        payload.put("senderEmail", email);
+        payload.put("senderName", safeText(user.getDisplayName(), email.split("@")[0]));
+        payload.put("createdAt", FieldValue.serverTimestamp());
+        payload.put("clientCreatedAt", System.currentTimeMillis());
+        input.setEnabled(false);
+        send.setEnabled(false);
+        tripChatDoc(chat.id).collection("messages").add(payload).addOnCompleteListener(task -> {
+            input.setEnabled(true);
+            send.setEnabled(true);
+            if (task.isSuccessful()) input.setText("");
+            else toast("That message could not be sent. Confirm your email is listed on this trip.");
+        });
     }
 
     private void renderDashboard(FirebaseUser user) {
         releaseMapWebView();
+        stopClockUpdates();
+        homeClockTime = null;
+        homeClockDate = null;
+        destinationClockTime = null;
+        destinationClockDate = null;
+        clockDifference = null;
         screen.removeAllViews();
         while (appRoot != null && appRoot.getChildCount() > 1) appRoot.removeViewAt(1);
         Trip activeTrip = getActiveTrip();
@@ -663,6 +1108,13 @@ public class MainActivity extends android.app.Activity {
         identity.addView(text(safeText(trip.name, "YOUR JOURNEY"), 28, INK, true), margins(0, 7, 0, 4));
         identity.addView(text(safeText(trip.route, locationLabel(trip)) + "  ·  " + tripDateRange(trip), 13, MUTED, false));
         top.addView(identity, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        Button chatButton = squareButton("••");
+        chatButton.setContentDescription("Open group chat");
+        chatButton.setOnClickListener(v -> openTripChat(user, trip.id, true));
+        LinearLayout.LayoutParams chatButtonParams = new LinearLayout.LayoutParams(dp(44), dp(44));
+        chatButtonParams.setMargins(0, 0, dp(8), 0);
+        top.addView(chatButton, chatButtonParams);
 
         Button menu = squareButton("+");
         menu.setContentDescription("Journey and feature menu");
@@ -689,7 +1141,7 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void renderEmptyDashboard(FirebaseUser user) {
-        screen.addView(text("JOURNEYSYNC", 13, CORAL, true));
+        screen.addView(text("JOURNEYSYNC", 13, BLUE_PRESSED, true));
         screen.addView(text("Create your first trip", 30, INK, true), margins(0, 18, 0, 8));
         screen.addView(text("Build any itinerary you want. Days, activities, flights, expenses, passes, places, and travelers will be saved to your Firebase profile.",
                 15, MUTED, false), margins(0, 0, 0, 24));
@@ -782,8 +1234,12 @@ public class MainActivity extends android.app.Activity {
         }
 
         renderWeatherCard(user, trip);
+        renderWorldClockCard(user, trip);
 
         screen.addView(sectionLabel("TRAVEL TOOLS"), margins(0, 0, 0, 8));
+        screen.addView(sectionLink("GROUP CHAT", "Talk with everyone listed on this trip in real time", () -> {
+            openTripChat(user, trip.id, true);
+        }));
         screen.addView(sectionLink("FLIGHT TRACKER", "Live gates, terminals, timing and delay status", () -> {
             activeSection = SECTION_FLIGHTS;
             renderDashboard(user);
@@ -875,6 +1331,14 @@ public class MainActivity extends android.app.Activity {
                 if (days == null || days.length() == 0) throw new IllegalStateException("No forecast is available for this city.");
                 JSONObject day = days.getJSONObject(0);
                 result.destination = response.optString("destination", trip.city);
+                result.timeZone = response.optString("timeZone", safeText(trip.timeZone, ""));
+                if (!usableTimeZone(result.timeZone)) {
+                    try {
+                        result.timeZone = fetchOpenMeteoTimeZone(trip.city, trip.region, trip.countryCode);
+                    } catch (Exception ignored) {
+                        result.timeZone = "";
+                    }
+                }
                 result.day = day.optString("day", "Today");
                 result.high = day.optString("high", "TBD");
                 result.low = day.optString("low", "TBD");
@@ -889,6 +1353,11 @@ public class MainActivity extends android.app.Activity {
             }
             runOnUiThread(() -> {
                 weatherLoading.remove(tripId);
+                if (result.error == null && usableTimeZone(result.timeZone)
+                        && !result.timeZone.equals(safeText(trip.timeZone, ""))) {
+                    trip.timeZone = result.timeZone;
+                    saveTrips(user);
+                }
                 weatherByTrip.put(tripId, result);
                 if (!showingTripLibrary && tripId.equals(activeTripId) && activeSection == SECTION_OVERVIEW) renderDashboard(user);
             });
@@ -896,6 +1365,321 @@ public class MainActivity extends android.app.Activity {
     }
 
 
+    private String fetchOpenMeteoTimeZone(String city, String region, String countryCode) throws Exception {
+        String query = safeText(city, "");
+        if (!safeText(region, "").isEmpty()) query += ", " + region.trim();
+        Uri.Builder builder = Uri.parse("https://geocoding-api.open-meteo.com/v1/search").buildUpon()
+                .appendQueryParameter("name", query)
+                .appendQueryParameter("count", "5")
+                .appendQueryParameter("language", "en")
+                .appendQueryParameter("format", "json");
+        if (!safeText(countryCode, "").isEmpty()) {
+            builder.appendQueryParameter("countryCode", countryCode.trim().toUpperCase(Locale.US));
+        }
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(builder.build().toString()).openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(10_000);
+            connection.setReadTimeout(15_000);
+            connection.setRequestProperty("Accept", "application/json");
+            int status = connection.getResponseCode();
+            if (status < 200 || status >= 300) throw new IllegalStateException("Location time zone is unavailable.");
+            JSONObject response = new JSONObject(readResponse(connection.getInputStream()));
+            JSONArray results = response.optJSONArray("results");
+            if (results != null) {
+                for (int i = 0; i < results.length(); i++) {
+                    String zone = results.optJSONObject(i) == null ? "" : results.optJSONObject(i).optString("timezone", "");
+                    if (usableTimeZone(zone)) return zone;
+                }
+            }
+            throw new IllegalStateException("Location time zone is unavailable.");
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+    private void renderWorldClockCard(FirebaseUser user, Trip trip) {
+        HomeLocation home = homeLocation != null ? homeLocation : HomeLocation.inferredFromDevice();
+        screen.addView(sectionLabel("WORLD CLOCK"), margins(0, 0, 0, 10));
+
+        LinearLayout clock = card();
+        clock.setBackground(roundedFill(BLUE_SOFT, "#B9D4E5"));
+        LinearLayout heading = new LinearLayout(this);
+        heading.setOrientation(LinearLayout.HORIZONTAL);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        heading.addView(text("HOME & DESTINATION", 11, BLUE_PRESSED, true),
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Button editHome = outlineButton(home.isConfirmed() ? "Change home" : "Confirm home");
+        editHome.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        editHome.setOnClickListener(v -> showHomeLocationDialog(user));
+        heading.addView(editHome, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(44)));
+        clock.addView(heading, margins(0, 0, 0, 13));
+
+        LinearLayout clocks = new LinearLayout(this);
+        clocks.setOrientation(LinearLayout.HORIZONTAL);
+
+        LinearLayout homeColumn = new LinearLayout(this);
+        homeColumn.setOrientation(LinearLayout.VERTICAL);
+        homeColumn.setPadding(0, 0, dp(10), 0);
+        homeColumn.addView(text("HOME · " + home.label().toUpperCase(Locale.US), 9, FAINT, true));
+        homeClockTime = text("--:--", 28, NAVY, true);
+        homeClockDate = text("", 11, MUTED, false);
+        homeColumn.addView(homeClockTime, margins(0, 7, 0, 1));
+        homeColumn.addView(homeClockDate);
+        clocks.addView(homeColumn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        LinearLayout destinationColumn = new LinearLayout(this);
+        destinationColumn.setOrientation(LinearLayout.VERTICAL);
+        destinationColumn.setPadding(dp(10), 0, 0, 0);
+        destinationColumn.addView(text("DESTINATION · " + locationLabel(trip).toUpperCase(Locale.US), 9, FAINT, true));
+        destinationClockTime = text("--:--", 28, NAVY, true);
+        destinationClockDate = text("", 11, MUTED, false);
+        destinationColumn.addView(destinationClockTime, margins(0, 7, 0, 1));
+        destinationColumn.addView(destinationClockDate);
+        clocks.addView(destinationColumn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        clock.addView(clocks);
+
+        clockDifference = text("Finding destination time zone…", 12, NAVY, true);
+        clockDifference.setGravity(Gravity.CENTER);
+        clockDifference.setPadding(dp(10), dp(9), dp(10), dp(9));
+        clockDifference.setBackground(roundedFill(SURFACE, LINE));
+        clock.addView(clockDifference, margins(0, 14, 0, 0));
+        if (!home.isConfirmed()) {
+            clock.addView(text("Home country and time zone were estimated from this device. Confirm your city once and it will sync to every signed-in device.",
+                    11, MUTED, false), margins(0, 10, 0, 0));
+        }
+        screen.addView(clock, margins(0, 0, 0, 24));
+        scheduleClockUpdates();
+    }
+
+    private void scheduleClockUpdates() {
+        stopClockUpdates();
+        updateClockViews();
+        clockLoop = new Runnable() {
+            @Override public void run() {
+                updateClockViews();
+                clockHandler.postDelayed(this, 30_000L);
+            }
+        };
+        clockHandler.postDelayed(clockLoop, 30_000L);
+    }
+
+    private void stopClockUpdates() {
+        if (clockLoop != null) clockHandler.removeCallbacks(clockLoop);
+        clockLoop = null;
+    }
+
+    private void updateClockViews() {
+        if (homeClockTime == null || destinationClockTime == null) return;
+        HomeLocation home = homeLocation != null ? homeLocation : HomeLocation.inferredFromDevice();
+        Trip trip = getActiveTrip();
+        String homeZone = usableTimeZone(home.timeZone) ? home.timeZone : TimeZone.getDefault().getID();
+        String destinationZone = trip != null && usableTimeZone(trip.timeZone) ? trip.timeZone : "";
+        long now = System.currentTimeMillis();
+        homeClockTime.setText(clockTime(now, homeZone));
+        homeClockDate.setText(clockDate(now, homeZone));
+        if (destinationZone.isEmpty()) {
+            destinationClockTime.setText("--:--");
+            destinationClockDate.setText("Loading time zone");
+            clockDifference.setText("Destination time zone is loading");
+        } else {
+            destinationClockTime.setText(clockTime(now, destinationZone));
+            destinationClockDate.setText(clockDate(now, destinationZone));
+            clockDifference.setText(clockDifference(now, homeZone, destinationZone));
+        }
+    }
+
+    private static String clockTime(long now, String zoneId) {
+        SimpleDateFormat format = new SimpleDateFormat("h:mm a", Locale.US);
+        format.setTimeZone(TimeZone.getTimeZone(zoneId));
+        return format.format(new Date(now));
+    }
+
+    private static String clockDate(long now, String zoneId) {
+        SimpleDateFormat format = new SimpleDateFormat("EEE, MMM d", Locale.US);
+        format.setTimeZone(TimeZone.getTimeZone(zoneId));
+        return format.format(new Date(now));
+    }
+
+    static String clockDifference(long now, String homeZoneId, String destinationZoneId) {
+        TimeZone homeZone = TimeZone.getTimeZone(homeZoneId);
+        TimeZone destinationZone = TimeZone.getTimeZone(destinationZoneId);
+        int differenceMinutes = (destinationZone.getOffset(now) - homeZone.getOffset(now)) / 60_000;
+        if (differenceMinutes == 0) return "Same time as home";
+        int absolute = Math.abs(differenceMinutes);
+        int hours = absolute / 60;
+        int minutes = absolute % 60;
+        StringBuilder duration = new StringBuilder();
+        if (hours > 0) duration.append(hours).append(" hr");
+        if (minutes > 0) {
+            if (duration.length() > 0) duration.append(' ');
+            duration.append(minutes).append(" min");
+        }
+        return "Destination is " + duration + (differenceMinutes > 0 ? " ahead of home" : " behind home");
+    }
+
+    private static boolean usableTimeZone(String zoneId) {
+        if (zoneId == null || zoneId.trim().isEmpty()) return false;
+        String cleaned = zoneId.trim();
+        String resolved = TimeZone.getTimeZone(cleaned).getID();
+        return !"GMT".equals(resolved)
+                || "GMT".equalsIgnoreCase(cleaned)
+                || "UTC".equalsIgnoreCase(cleaned)
+                || cleaned.toUpperCase(Locale.US).startsWith("GMT+")
+                || cleaned.toUpperCase(Locale.US).startsWith("GMT-");
+    }
+
+    private void showHomeLocationDialog(FirebaseUser user) {
+        HomeLocation current = homeLocation != null ? homeLocation : HomeLocation.inferredFromDevice();
+        LinearLayout form = formContainer();
+        Spinner countrySpinner = new Spinner(this);
+        Spinner regionSpinner = new Spinner(this);
+        Spinner citySpinner = new Spinner(this);
+        countrySpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, LocationData.countryNames()));
+        int initialCountryIndex = LocationData.countryIndex(current.countryCode);
+        LocationData.Country initialCountry = LocationData.COUNTRIES.get(initialCountryIndex);
+        List<String> initialRegions = new ArrayList<>();
+        for (LocationData.Region region : initialCountry.regions) initialRegions.add(region.name);
+        regionSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, initialRegions));
+        int initialRegionIndex = 0;
+        for (int i = 0; i < initialCountry.regions.size(); i++) {
+            if (initialCountry.regions.get(i).name.equalsIgnoreCase(safeText(current.region, ""))) {
+                initialRegionIndex = i;
+                break;
+            }
+        }
+        final int initialRegionPosition = initialRegionIndex;
+        LocationData.Region initialRegion = initialCountry.regions.get(initialRegionPosition);
+        citySpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, initialRegion.cities));
+        countrySpinner.setSelection(initialCountryIndex);
+        regionSpinner.setSelection(initialRegionPosition);
+        int initialCityIndex = initialRegion.cities.indexOf(current.city);
+        if (initialCityIndex >= 0) citySpinner.setSelection(initialCityIndex);
+        addSpinnerField(form, "Home country", countrySpinner);
+        addSpinnerField(form, initialCountry.regionLabel, regionSpinner);
+        addSpinnerField(form, "Home city", citySpinner);
+        form.addView(text("This is saved privately to your Firebase account. JourneySync uses it only to compare your home clock with trip destinations.",
+                12, MUTED, false), margins(0, 0, 0, 4));
+
+        final boolean[] firstCountryCallback = {true};
+        final boolean[] firstRegionCallback = {true};
+        countrySpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                LocationData.Country country = LocationData.COUNTRIES.get(position);
+                if (firstCountryCallback[0] && position == initialCountryIndex) {
+                    firstCountryCallback[0] = false;
+                    return;
+                }
+                firstCountryCallback[0] = false;
+                List<String> regions = new ArrayList<>();
+                for (LocationData.Region region : country.regions) regions.add(region.name);
+                regionSpinner.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_spinner_dropdown_item, regions));
+            }
+        });
+        regionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                LocationData.Country country = LocationData.COUNTRIES.get(countrySpinner.getSelectedItemPosition());
+                if (country.regions.isEmpty()) return;
+                LocationData.Region region = country.regions.get(Math.min(position, country.regions.size() - 1));
+                if (firstRegionCallback[0] && country == initialCountry && position == initialRegionPosition) {
+                    firstRegionCallback[0] = false;
+                    return;
+                }
+                firstRegionCallback[0] = false;
+                citySpinner.setAdapter(new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_spinner_dropdown_item, region.cities));
+            }
+        });
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Set home location")
+                .setMessage("Choose the city you normally live in, not your current travel location.")
+                .setView(scrollable(form))
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Save home", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            int countryIndex = countrySpinner.getSelectedItemPosition();
+            LocationData.Country country = LocationData.COUNTRIES.get(Math.max(0, countryIndex));
+            int regionIndex = Math.max(0, Math.min(regionSpinner.getSelectedItemPosition(), country.regions.size() - 1));
+            LocationData.Region region = country.regions.get(regionIndex);
+            int cityIndex = Math.max(0, Math.min(citySpinner.getSelectedItemPosition(), region.cities.size() - 1));
+            HomeLocation selected = new HomeLocation();
+            selected.countryCode = country.code;
+            selected.country = country.name;
+            selected.region = region.name;
+            selected.city = region.cities.get(cityIndex);
+            selected.source = "confirmed";
+            Button save = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            save.setEnabled(false);
+            save.setText("Finding time zone…");
+            resolveAndSaveHomeLocation(user, selected, save, dialog);
+        }));
+        dialog.show();
+    }
+
+    private void resolveAndSaveHomeLocation(FirebaseUser user, HomeLocation selected, Button save, AlertDialog dialog) {
+        Uri uri = Uri.parse(BuildConfig.FLIGHT_API_BASE_URL + "/api/weather").buildUpon()
+                .appendQueryParameter("city", safeText(selected.city, ""))
+                .appendQueryParameter("region", safeText(selected.region, ""))
+                .appendQueryParameter("country", safeText(selected.country, ""))
+                .appendQueryParameter("countryCode", safeText(selected.countryCode, ""))
+                .build();
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+            String failure = null;
+            try {
+                connection = (HttpURLConnection) new URL(uri.toString()).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(15_000);
+                connection.setReadTimeout(25_000);
+                connection.setRequestProperty("Accept", "application/json");
+                int status = connection.getResponseCode();
+                InputStream stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
+                JSONObject response = new JSONObject(readResponse(stream));
+                if (status < 200 || status >= 300) throw new IllegalStateException(response.optString("error", "Home time zone could not be found."));
+                String zone = response.optString("timeZone", "");
+                if (!usableTimeZone(zone)) {
+                    zone = fetchOpenMeteoTimeZone(selected.city, selected.region, selected.countryCode);
+                }
+                if (!usableTimeZone(zone)) throw new IllegalStateException("Home time zone could not be found.");
+                selected.city = response.optString("destination", selected.city);
+                selected.region = response.optString("region", selected.region);
+                selected.country = response.optString("country", selected.country);
+                selected.countryCode = response.optString("countryCode", selected.countryCode);
+                selected.timeZone = zone;
+            } catch (Exception error) {
+                failure = error.getMessage() == null ? "Home location could not be saved." : error.getMessage();
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+            final String failureMessage = failure;
+            runOnUiThread(() -> {
+                if (failureMessage != null) {
+                    save.setEnabled(true);
+                    save.setText("Save home");
+                    toast(failureMessage);
+                    return;
+                }
+                Map<String, Object> payload = selected.toMap();
+                payload.put("updatedAt", FieldValue.serverTimestamp());
+                homeLocationDoc(user).set(payload, SetOptions.merge()).addOnCompleteListener(task -> {
+                    save.setEnabled(true);
+                    save.setText("Save home");
+                    if (!task.isSuccessful()) {
+                        toast("Home location could not be synced to Firebase.");
+                        return;
+                    }
+                    homeLocation = selected;
+                    dialog.dismiss();
+                    renderDashboard(user);
+                    toast("Home clock updated on your account.");
+                });
+            });
+        }).start();
+    }
     private void releaseMapWebView() {
         WebView map = mapWebView;
         mapWebView = null;
@@ -944,7 +1728,7 @@ public class MainActivity extends android.app.Activity {
                 + "if(p.desc){var br=document.createElement('br'),desc=document.createElement('span');desc.textContent=p.desc;box.appendChild(br);box.appendChild(desc);}"
                 + "m.bindPopup(box);g.push([p.lat,p.lon]);});"
                 + "if(g.length>1){map.fitBounds(g,{padding:[30,30]});}else{map.setView(g[0],11);}"
-                + "if(g.length>1){L.polyline(g,{color:'" + CORAL + "',weight:3,opacity:.7}).addTo(map);}"
+                + "if(g.length>1){L.polyline(g,{color:'" + BLUE + "',weight:3,opacity:.7}).addTo(map);}"
                 + "}else{map.setView([20,0],1);}"
                 + "</script></body></html>";
     }
@@ -1146,7 +1930,7 @@ public class MainActivity extends android.app.Activity {
         add.setOnClickListener(v -> showAddTravelerDialog(user, trip));
         heading.addView(add);
         screen.addView(heading, margins(0, 0, 0, 14));
-        screen.addView(text("Traveler profiles stay with this itinerary. Share sends a read-only summary and does not grant account access.", 12, MUTED, false), margins(0, 0, 0, 14));
+        screen.addView(text("Traveler account emails can join this trip chat. The itinerary and the rest of your account remain private.", 12, MUTED, false), margins(0, 0, 0, 14));
         if (trip.travelersList == null || trip.travelersList.isEmpty()) {
             LinearLayout empty = card();
             empty.addView(text("No traveler profiles saved yet.", 15, MUTED, true));
@@ -2370,9 +3154,22 @@ public class MainActivity extends android.app.Activity {
         new AlertDialog.Builder(this).setTitle("Add Traveler")
                 .setView(scrollable(form)).setNegativeButton("Cancel", null)
                 .setPositiveButton("Add Traveler", (dialog, which) -> {
+                    String travelerEmail = normalizedEmail(email.getText().toString());
+                    if (!travelerEmail.contains("@")) {
+                        toast("Enter the traveler's JourneySync account email.");
+                        return;
+                    }
+                    if (trip.travelersList != null) {
+                        for (Traveler existingTraveler : trip.travelersList) {
+                            if (travelerEmail.equals(normalizedEmail(existingTraveler == null ? null : existingTraveler.email))) {
+                                toast("That traveler email is already on this trip.");
+                                return;
+                            }
+                        }
+                    }
                     Traveler traveler = new Traveler();
                     traveler.name = fallback(name, "Traveler");
-                    traveler.email = fallback(email, "traveler@example.com");
+                    traveler.email = travelerEmail;
                     traveler.role = fallback(role, "Traveler");
                     traveler.avatar = Traveler.initials(traveler.name);
                     traveler.bg = "blue";
@@ -2453,10 +3250,11 @@ public class MainActivity extends android.app.Activity {
         for (LocationData.Region region : initialCountry.regions) initialRegions.add(region.name);
         regionSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, initialRegions));
         int initialRegionIndex = existing == null ? 0 : LocationData.regionIndex(initialCountry, existing.regionCode);
-        LocationData.Region initialRegion = initialCountry.regions.get(initialRegionIndex);
+        final int initialRegionPosition = initialRegionIndex;
+        LocationData.Region initialRegion = initialCountry.regions.get(initialRegionPosition);
         citySpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, initialRegion.cities));
         countrySpinner.setSelection(initialCountryIndex);
-        regionSpinner.setSelection(initialRegionIndex);
+        regionSpinner.setSelection(initialRegionPosition);
         if (existing != null) {
             int initialCityIndex = initialRegion.cities.indexOf(existing.city);
             if (initialCityIndex >= 0) citySpinner.setSelection(initialCityIndex);
@@ -2498,7 +3296,7 @@ public class MainActivity extends android.app.Activity {
                 LocationData.Country country = LocationData.COUNTRIES.get(countrySpinner.getSelectedItemPosition());
                 if (country.regions.isEmpty()) return;
                 LocationData.Region region = country.regions.get(Math.min(position, country.regions.size() - 1));
-                if (firstRegionCallback[0] && country == initialCountry && position == initialRegionIndex) {
+                if (firstRegionCallback[0] && country == initialCountry && position == initialRegionPosition) {
                     firstRegionCallback[0] = false;
                     return;
                 }
@@ -2572,7 +3370,7 @@ public class MainActivity extends android.app.Activity {
     private void confirmDeleteTrip(FirebaseUser user, Trip trip) {
         if (trip == null) return;
         LinearLayout form = formContainer();
-        form.addView(text("This permanently removes the trip and its itinerary from your Firebase profile. Type DELETE to confirm.", 14, MUTED, false), margins(0, 0, 0, 10));
+        form.addView(text("This removes the trip from your Firebase profile and closes its group chat. Type DELETE to confirm.", 14, MUTED, false), margins(0, 0, 0, 10));
         EditText confirmation = input("DELETE", InputType.TYPE_CLASS_TEXT, "");
         form.addView(confirmation);
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -2587,6 +3385,7 @@ public class MainActivity extends android.app.Activity {
                         return;
                     }
                     savedTrips.remove(trip);
+                    tripChatDoc(trip.id).delete();
                     weatherByTrip.remove(trip.id);
                     activeTripId = firstActiveTripId();
                     saveActiveTripSelection(user);
@@ -2923,15 +3722,15 @@ public class MainActivity extends android.app.Activity {
         item.setOnClickListener(v -> action.run());
 
         View indicator = new View(this);
-        indicator.setBackgroundColor(Color.parseColor(selected ? CORAL : SURFACE));
+        indicator.setBackgroundColor(Color.parseColor(selected ? BLUE : SURFACE));
         item.addView(indicator, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(3)));
 
-        TextView icon = text(glyph, 17, selected ? CORAL : INK, true);
+        TextView icon = text(glyph, 17, selected ? BLUE_PRESSED : INK, true);
         icon.setGravity(Gravity.CENTER);
         icon.setMaxLines(1);
         item.addView(icon, margins(0, 8, 0, 1));
-        TextView caption = text(label, 9, selected ? CORAL : MUTED, true);
+        TextView caption = text(label, 9, selected ? BLUE_PRESSED : MUTED, true);
         caption.setGravity(Gravity.CENTER);
         caption.setLetterSpacing(.08f);
         // Six tabs share the width, so a narrow screen leaves roughly 50dp each.
@@ -3012,6 +3811,19 @@ public class MainActivity extends android.app.Activity {
         group.setOrientation(LinearLayout.VERTICAL);
         addField(group, label, field);
         return group;
+    }
+
+    private LinearLayout loginFeature(String title, String subtitle) {
+        LinearLayout feature = new LinearLayout(this);
+        feature.setOrientation(LinearLayout.VERTICAL);
+        feature.setGravity(Gravity.CENTER);
+        feature.setPadding(dp(8), dp(11), dp(8), dp(11));
+        feature.setBackground(roundedFill(BLUE_SOFT, "#B9D4E5"));
+        feature.addView(text(title, 10, BLUE_PRESSED, true));
+        TextView detail = text(subtitle, 9, MUTED, false);
+        detail.setGravity(Gravity.CENTER);
+        feature.addView(detail, margins(0, 3, 0, 0));
+        return feature;
     }
 
     private LinearLayout card() {
@@ -3098,7 +3910,7 @@ public class MainActivity extends android.app.Activity {
     private Button primaryButton(String label) {
         Button button = new Button(this);
         button.setText(label);
-        styleButton(button, CORAL, CORAL_PRESSED, null, "#FFFFFF");
+        styleButton(button, BLUE, BLUE_PRESSED, null, NAVY);
         return button;
     }
 
@@ -3267,6 +4079,7 @@ public class MainActivity extends android.app.Activity {
         String icon;
         String description;
         String source;
+        String timeZone;
         String error;
     }
 
@@ -3405,6 +4218,10 @@ public class MainActivity extends android.app.Activity {
     private static String fallback(EditText field, String fallback) {
         String value = field.getText().toString().trim();
         return value.isEmpty() ? fallback : value;
+    }
+
+    private static String normalizedEmail(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.US);
     }
 
     private static String safeText(String value, String fallback) {

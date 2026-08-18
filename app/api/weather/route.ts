@@ -9,6 +9,7 @@ type GeocodingResult = {
   country?: string;
   country_code?: string;
   admin1?: string;
+  timezone?: string;
 };
 
 type GeocodingResponse = {
@@ -16,6 +17,8 @@ type GeocodingResponse = {
 };
 
 type ForecastResponse = {
+  timezone?: string;
+  utc_offset_seconds?: number;
   daily_units?: { temperature_2m_max?: string };
   daily?: {
     time?: string[];
@@ -200,11 +203,16 @@ export async function GET(request: Request): Promise<Response> {
     forecastUrl.searchParams.set("temperature_unit", countryCode === "US" ? "fahrenheit" : "celsius");
 
     let days: WeatherDay[] = [];
+    let timeZone = location.timezone || "";
+    let utcOffsetSeconds: number | null = null;
     let source = "Open-Meteo";
     try {
       const forecastResponse = await fetchWithTimeout(forecastUrl, { cache: "no-store" }, 8_000);
       if (!forecastResponse.ok) throw new Error(`Open-Meteo returned ${forecastResponse.status}`);
-      days = openMeteoDays((await forecastResponse.json()) as ForecastResponse);
+      const forecast = (await forecastResponse.json()) as ForecastResponse;
+      days = openMeteoDays(forecast);
+      timeZone = forecast.timezone || timeZone;
+      utcOffsetSeconds = typeof forecast.utc_offset_seconds === "number" ? forecast.utc_offset_seconds : null;
       if (days.length === 0) throw new Error("Open-Meteo returned no forecast days");
     } catch (error) {
       console.warn("Open-Meteo forecast unavailable; using 7Timer fallback.", error);
@@ -219,6 +227,8 @@ export async function GET(request: Request): Promise<Response> {
       countryCode: location.country_code || countryCode,
       latitude: location.latitude,
       longitude: location.longitude,
+      timeZone,
+      utcOffsetSeconds,
       days,
       source,
     });

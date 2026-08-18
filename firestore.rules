@@ -2,8 +2,84 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasAccountEmail() {
+      return signedIn() && request.auth.token.email is string;
+    }
+
+    function accountEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function isChatMember(chat) {
+      return hasAccountEmail()
+        && chat.memberEmails is list
+        && accountEmail() in chat.memberEmails;
+    }
+
+    function validChat(chat, chatId) {
+      return chat.keys().hasOnly([
+          'tripId', 'tripName', 'tripRoute', 'ownerUid', 'ownerEmail',
+          'memberEmails', 'updatedAt'
+        ])
+        && chat.tripId == chatId
+        && chat.tripName is string
+        && chat.tripName.size() > 0
+        && chat.tripName.size() <= 160
+        && chat.tripRoute is string
+        && chat.tripRoute.size() <= 300
+        && chat.ownerUid == request.auth.uid
+        && chat.ownerEmail == accountEmail()
+        && chat.memberEmails is list
+        && chat.memberEmails.size() > 0
+        && chat.memberEmails.size() <= 50
+        && accountEmail() in chat.memberEmails
+        && chat.updatedAt == request.time;
+    }
+
     match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /trip_chats/{chatId} {
+      allow get, list: if isChatMember(resource.data);
+      allow create: if hasAccountEmail()
+        && validChat(request.resource.data, chatId);
+      allow update: if hasAccountEmail()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.tripId == resource.data.tripId
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['tripName', 'tripRoute', 'ownerEmail', 'memberEmails', 'updatedAt'])
+        && validChat(request.resource.data, chatId);
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+
+      match /messages/{messageId} {
+        function chat() {
+          return get(/databases/$(database)/documents/trip_chats/$(chatId)).data;
+        }
+
+        allow read: if isChatMember(chat());
+        allow create: if isChatMember(chat())
+          && request.resource.data.keys().hasOnly([
+            'text', 'senderUid', 'senderEmail', 'senderName',
+            'createdAt', 'clientCreatedAt'
+          ])
+          && request.resource.data.text is string
+          && request.resource.data.text.trim().size() > 0
+          && request.resource.data.text.size() <= 1000
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.senderEmail == accountEmail()
+          && request.resource.data.senderName is string
+          && request.resource.data.senderName.size() > 0
+          && request.resource.data.senderName.size() <= 80
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.clientCreatedAt is int;
+        allow update, delete: if false;
+      }
     }
   }
 }
