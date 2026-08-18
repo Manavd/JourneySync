@@ -21,13 +21,17 @@ import {
   getFirestore,
   initializeFirestore,
   persistentLocalCache,
-  persistentSingleTabManager,
+  persistentMultipleTabManager,
   doc as firestoreDoc,
   setDoc as firestoreSetDoc,
   getDoc as firestoreGetDoc,
   onSnapshot as firestoreOnSnapshot,
+  deleteField as firestoreDeleteField,
   type Firestore,
   type DocumentReference,
+  type DocumentSnapshot,
+  type DocumentData,
+  type FieldValue,
   type SetOptions,
 } from "firebase/firestore";
 
@@ -98,7 +102,7 @@ if (typeof window !== "undefined") {
       // private browsing, multiple open tabs without broadcast support).
       try {
         dbInstance = initializeFirestore(app, {
-          localCache: persistentLocalCache({ tabManager: persistentSingleTabManager({}) }),
+          localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
         }, "default");
       } catch {
         dbInstance = getFirestore(app, "default");
@@ -177,21 +181,25 @@ export async function getIdToken(): Promise<string> {
   return currentUser.getIdToken();
 }
 
-export function doc(_db: Firestore, ...pathSegments: string[]): DocumentReference {
+export function doc(_db: Firestore, ...pathSegments: string[]): DocumentReference<DocumentData> {
   return firestoreDoc(requireDb(), pathSegments.join("/"));
 }
 
-export async function setDoc(docRef: DocumentReference, data: Record<string, unknown>, options?: SetOptions) {
+export async function setDoc(docRef: DocumentReference<DocumentData>, data: Record<string, unknown>, options?: SetOptions) {
   await firestoreSetDoc(docRef, data, options ?? {});
 }
 
-export async function getDoc(docRef: DocumentReference) {
+export async function getDoc(docRef: DocumentReference<DocumentData>): Promise<DocumentSnapshot<DocumentData>> {
   return firestoreGetDoc(docRef);
 }
 
+export function deleteField(): FieldValue {
+  return firestoreDeleteField();
+}
+
 export function onSnapshot(
-  docRef: DocumentReference,
-  onNext: (snapshot: Awaited<ReturnType<typeof firestoreGetDoc>>) => void,
+  docRef: DocumentReference<DocumentData>,
+  onNext: (snapshot: DocumentSnapshot<DocumentData>) => void,
   onError?: (error: Error) => void,
 ) {
   return firestoreOnSnapshot(docRef, onNext, onError);

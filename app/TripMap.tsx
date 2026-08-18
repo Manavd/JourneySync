@@ -30,10 +30,15 @@ export default function TripMap({
   onSelect,
 }: TripMapProps) {
   const mapElementRef = useRef<HTMLDivElement>(null);
+  const onSelectRef = useRef(onSelect);
   const [resolvedCenter, setResolvedCenter] = useState<Coordinates | null>(null);
   const [mapError, setMapError] = useState("");
   const pointKey = useMemo(() => JSON.stringify(points), [points]);
   const effectiveCenter = center ?? resolvedCenter;
+
+  useEffect(() => {
+    onSelectRef.current = onSelect;
+  }, [onSelect]);
 
   useEffect(() => {
     if (center || !location) return;
@@ -44,7 +49,7 @@ export default function TripMap({
       .then(() => {
         setResolvedCenter(null);
         setMapError("");
-        return fetch(`/api/geocode?${query.toString()}`, { cache: "no-store", signal: controller.signal });
+        return fetch(`/api/geocode?${query.toString()}`, { signal: controller.signal });
       })
       .then(async (response) => {
         const body = await response.json() as Coordinates & { error?: string };
@@ -112,7 +117,7 @@ export default function TripMap({
         description.style.margin = "4px 0 0";
         content.append(title, description);
         marker.bindPopup(content);
-        marker.on("click", () => onSelect(point.name));
+        marker.on("click", () => onSelectRef.current(point.name));
         bounds.extend([point.latitude, point.longitude]);
       });
 
@@ -121,17 +126,19 @@ export default function TripMap({
       }
       window.setTimeout(() => map.invalidateSize(), 0);
       cleanup = () => map.remove();
-    }).catch(() => setMapError("The interactive map could not load. Refresh and try again."));
+    }).catch(() => {
+      if (!cancelled) setMapError("The interactive map could not load. Refresh and try again.");
+    });
 
     return () => {
       cancelled = true;
       cleanup();
     };
-  }, [effectiveCenter, location, pointKey, points, selectedName, onSelect]);
+  }, [effectiveCenter, location, pointKey, points, selectedName]);
 
   if (!location) return <div className="trip-map-status" role="alert">Choose a city in trip details to show its map.</div>;
-  if (!center && mapError) return <div className="trip-map-status" role="alert">{mapError}</div>;
+  if (mapError) return <div className="trip-map-status" role="alert">{mapError}</div>;
   if (!effectiveCenter) return <div className="trip-map-status" aria-live="polite">Locating {location}…</div>;
 
-  return <div ref={mapElementRef} className="trip-map" aria-label={`Interactive map of ${location}`} />;
+  return <div ref={mapElementRef} className="trip-map" role="region" aria-label={`Interactive map of ${location}`} />;
 }

@@ -2,6 +2,7 @@ package com.manavdesai.journeysync;
 
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
@@ -17,6 +18,8 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebViewClient;
 import android.widget.AdapterView;
 import android.widget.Button;
 import android.widget.ArrayAdapter;
@@ -43,6 +46,7 @@ import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.auth.GoogleAuthProvider;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.SetOptions;
 
@@ -122,6 +126,7 @@ public class MainActivity extends android.app.Activity {
     private GoogleSignInClient googleClient;
     private LinearLayout appRoot;
     private LinearLayout screen;
+    private WebView mapWebView;
 
     private final List<Button> authButtons = new ArrayList<>();
     private final Set<String> liveRefreshes = new HashSet<>();
@@ -196,6 +201,7 @@ public class MainActivity extends android.app.Activity {
     @Override
     protected void onDestroy() {
         stopFlightRefreshLoop();
+        releaseMapWebView();
         if (tripsListener != null) {
             tripsListener.remove();
             tripsListener = null;
@@ -230,6 +236,7 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void prepareScreen() {
+        releaseMapWebView();
         appRoot = new LinearLayout(this);
         appRoot.setOrientation(LinearLayout.VERTICAL);
         appRoot.setBackgroundColor(Color.parseColor(SURFACE));
@@ -395,6 +402,24 @@ public class MainActivity extends android.app.Activity {
                 .collection("user_trips").document("all_trips");
     }
 
+    private SharedPreferences uiPreferences() {
+        return getSharedPreferences("journeysync_ui", MODE_PRIVATE);
+    }
+
+    private String localActiveTripId(FirebaseUser user) {
+        if (user == null) return "";
+        return uiPreferences().getString("active_trip_" + user.getUid(), "");
+    }
+
+    private void saveActiveTripSelection(FirebaseUser user) {
+        if (user == null) return;
+        String key = "active_trip_" + user.getUid();
+        SharedPreferences.Editor editor = uiPreferences().edit();
+        if (activeTripId == null || activeTripId.isEmpty()) editor.remove(key);
+        else editor.putString(key, activeTripId);
+        editor.apply();
+    }
+
     private void loadTrips(FirebaseUser user) {
         if (tripsListener != null) tripsListener.remove();
         tripsListener = allTripsDoc(user).addSnapshotListener((snapshot, error) -> {
@@ -416,10 +441,10 @@ public class MainActivity extends android.app.Activity {
                     }
                 }
             }
-            String storedActiveId = snapshot.getString("activeTripId");
-            if (storedActiveId != null) {
-                activeTripId = storedActiveId;
-            }
+            String localActiveId = localActiveTripId(user);
+            String legacyCloudActiveId = snapshot.getString("activeTripId");
+            activeTripId = localActiveId.isEmpty()
+                    ? safeText(legacyCloudActiveId, "") : localActiveId;
             tripsLoaded = true;
             if (savedTrips.isEmpty()) {
                 activeTripId = "";
@@ -428,6 +453,7 @@ public class MainActivity extends android.app.Activity {
                 if (active == null) activeTripId = savedTrips.get(0).id;
             }
             renderCurrentView(user);
+            saveActiveTripSelection(user);
         });
     }
 
@@ -438,7 +464,7 @@ public class MainActivity extends android.app.Activity {
         }
         Map<String, Object> payload = new HashMap<>();
         payload.put("savedTrips", list);
-        payload.put("activeTripId", activeTripId);
+        payload.put("activeTripId", FieldValue.delete());
         payload.put("updatedAt", System.currentTimeMillis());
         allTripsDoc(user).set(payload, SetOptions.merge())
                 .addOnFailureListener(error -> toast("Could not sync changes to cloud yet."));
@@ -478,6 +504,7 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void renderTripLibrary(FirebaseUser user) {
+        releaseMapWebView();
         screen.removeAllViews();
         while (appRoot != null && appRoot.getChildCount() > 1) appRoot.removeViewAt(1);
         showingTripLibrary = true;
@@ -542,7 +569,8 @@ public class MainActivity extends android.app.Activity {
                 activeDayIndex = 0;
                 activeSection = SECTION_OVERVIEW;
                 showingTripLibrary = false;
-                commit(user);
+                saveActiveTripSelection(user);
+                renderDashboard(user);
             });
             tripCard.addView(open, margins(0, 0, 0, 9));
 
@@ -572,6 +600,7 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void renderDashboard(FirebaseUser user) {
+        releaseMapWebView();
         screen.removeAllViews();
         while (appRoot != null && appRoot.getChildCount() > 1) appRoot.removeViewAt(1);
         Trip activeTrip = getActiveTrip();
@@ -718,9 +747,12 @@ public class MainActivity extends android.app.Activity {
             activeSection = SECTION_GUEST_FLIGHTS;
             renderDashboard(user);
         }));
-        screen.addView(sectionLink("TRAVELERS", "Invite and manage everyone on this trip", () -> {
+        screen.addView(sectionLink("TRAVELERS", "Keep names and expense roles with this trip", () -> {
             activeSection = SECTION_TRAVELERS;
             renderDashboard(user);
+        }));
+        screen.addView(sectionLink("SHARE TRIP SUMMARY", "Send a read-only itinerary without account access", () -> {
+            shareTrip(trip);
         }), margins(0, 0, 0, 22));
 
         screen.addView(sectionLabel("TRIP SUMMARY"), margins(0, 0, 0, 10));
@@ -754,7 +786,7 @@ public class MainActivity extends android.app.Activity {
         Button refresh = outlineButton("Refresh weather");
         refresh.setOnClickListener(v -> {
             weatherByTrip.remove(trip.id);
-            fetchWeather(user, trip);
+            fetchWeather(user, trip, true);
             renderDashboard(user);
         });
         weather.addView(refresh);
@@ -762,16 +794,20 @@ public class MainActivity extends android.app.Activity {
     }
 
     private void fetchWeather(FirebaseUser user, Trip trip) {
+        fetchWeather(user, trip, false);
+    }
+
+    private void fetchWeather(FirebaseUser user, Trip trip, boolean forceRefresh) {
         if (trip == null || trip.id == null || weatherLoading.contains(trip.id)) return;
         weatherLoading.add(trip.id);
         final String tripId = trip.id;
-        Uri uri = Uri.parse(BuildConfig.FLIGHT_API_BASE_URL + "/api/weather").buildUpon()
+        Uri.Builder uriBuilder = Uri.parse(BuildConfig.FLIGHT_API_BASE_URL + "/api/weather").buildUpon()
                 .appendQueryParameter("city", safeText(trip.city, ""))
                 .appendQueryParameter("region", safeText(trip.region, ""))
                 .appendQueryParameter("country", safeText(trip.country, ""))
-                .appendQueryParameter("countryCode", safeText(trip.countryCode, ""))
-                .appendQueryParameter("refresh", String.valueOf(System.currentTimeMillis()))
-                .build();
+                .appendQueryParameter("countryCode", safeText(trip.countryCode, ""));
+        if (forceRefresh) uriBuilder.appendQueryParameter("refresh", String.valueOf(System.currentTimeMillis()));
+        Uri uri = uriBuilder.build();
         new Thread(() -> {
             HttpURLConnection connection = null;
             WeatherSnapshot result = new WeatherSnapshot();
@@ -780,10 +816,12 @@ public class MainActivity extends android.app.Activity {
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(15_000);
                 connection.setReadTimeout(25_000);
-                connection.setUseCaches(false);
+                connection.setUseCaches(!forceRefresh);
                 connection.setRequestProperty("Accept", "application/json");
-                connection.setRequestProperty("Cache-Control", "no-cache, no-store, max-age=0");
-                connection.setRequestProperty("Pragma", "no-cache");
+                if (forceRefresh) {
+                    connection.setRequestProperty("Cache-Control", "no-cache, no-store, max-age=0");
+                    connection.setRequestProperty("Pragma", "no-cache");
+                }
                 int status = connection.getResponseCode();
                 InputStream stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
                 JSONObject response = new JSONObject(readResponse(stream));
@@ -812,6 +850,18 @@ public class MainActivity extends android.app.Activity {
         }).start();
     }
 
+
+    private void releaseMapWebView() {
+        WebView map = mapWebView;
+        mapWebView = null;
+        if (map == null) return;
+        map.stopLoading();
+        if (map.getParent() instanceof android.view.ViewGroup) {
+            ((android.view.ViewGroup) map.getParent()).removeView(map);
+        }
+        map.removeAllViews();
+        map.destroy();
+    }
     /**
      * Builds a Leaflet/OpenStreetMap page for the pins that carry coordinates.
      * Mirrors the web TripMap component, and needs no API key or billing the
@@ -836,16 +886,18 @@ public class MainActivity extends android.app.Activity {
 
         return "<!doctype html><html><head><meta charset='utf-8'>"
                 + "<meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=1'>"
-                + "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>"
+                + "<link rel='stylesheet' href='leaflet.css'/>"
                 + "<style>html,body,#map{height:100%;margin:0;background:" + CREAM + ";}"
                 + ".leaflet-container{font-family:sans-serif;}</style></head><body><div id='map'></div>"
-                + "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script><script>"
+                + "<script src='leaflet.js'></script><script>"
                 + "var pts=" + markers + ";"
                 + "var map=L.map('map',{zoomControl:true,attributionControl:false});"
                 + "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(map);"
                 + "if(pts.length){var g=[];pts.forEach(function(p){"
                 + "var m=L.marker([p.lat,p.lon]).addTo(map);"
-                + "m.bindPopup('<b>'+p.name+'</b>'+(p.desc?'<br>'+p.desc:''));g.push([p.lat,p.lon]);});"
+                + "var box=document.createElement('div'),title=document.createElement('b');title.textContent=p.name;box.appendChild(title);"
+                + "if(p.desc){var br=document.createElement('br'),desc=document.createElement('span');desc.textContent=p.desc;box.appendChild(br);box.appendChild(desc);}"
+                + "m.bindPopup(box);g.push([p.lat,p.lon]);});"
                 + "if(g.length>1){map.fitBounds(g,{padding:[30,30]});}else{map.setView(g[0],11);}"
                 + "if(g.length>1){L.polyline(g,{color:'" + CORAL + "',weight:3,opacity:.7}).addTo(map);}"
                 + "}else{map.setView([20,0],1);}"
@@ -862,17 +914,28 @@ public class MainActivity extends android.app.Activity {
             }
         }
         if (!located.isEmpty()) {
-            WebView map = new WebView(this);
+            mapWebView = new WebView(this);
+            WebView map = mapWebView;
             WebSettings settings = map.getSettings();
             settings.setJavaScriptEnabled(true);
-            settings.setDomStorageEnabled(true);
+            settings.setDomStorageEnabled(false);
+            settings.setAllowFileAccess(true);
+            settings.setAllowContentAccess(false);
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) settings.setSafeBrowsingEnabled(true);
+            map.setWebViewClient(new WebViewClient() {
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                    return true;
+                }
+            });
             map.setBackgroundColor(Color.parseColor(CREAM));
             GradientDrawable frame = new GradientDrawable();
             frame.setColor(Color.parseColor(CREAM));
             frame.setCornerRadius(dp(RADIUS_DP));
             map.setBackground(frame);
             map.setClipToOutline(true);
-            map.loadDataWithBaseURL("https://tile.openstreetmap.org/", tripMapHtml(located),
+            map.loadDataWithBaseURL("file:///android_asset/leaflet/", tripMapHtml(located),
                     "text/html", "utf-8", null);
             LinearLayout.LayoutParams mapParams = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dp(240));
@@ -1033,11 +1096,12 @@ public class MainActivity extends android.app.Activity {
         heading.setOrientation(LinearLayout.HORIZONTAL);
         heading.setGravity(Gravity.CENTER_VERTICAL);
         heading.addView(text("Travel Team", 22, INK, true), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        Button add = primaryButton("＋ Invite");
+        Button add = primaryButton("＋ Add");
         add.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         add.setOnClickListener(v -> showAddTravelerDialog(user, trip));
         heading.addView(add);
         screen.addView(heading, margins(0, 0, 0, 14));
+        screen.addView(text("Traveler profiles stay with this itinerary. Share sends a read-only summary and does not grant account access.", 12, MUTED, false), margins(0, 0, 0, 14));
         if (trip.travelersList == null || trip.travelersList.isEmpty()) {
             LinearLayout empty = card();
             empty.addView(text("No traveler profiles saved yet.", 15, MUTED, true));
@@ -1164,7 +1228,7 @@ public class MainActivity extends android.app.Activity {
                 dayBtn.setAllCaps(true);
                 dayBtn.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
                 GradientDrawable bg = new GradientDrawable();
-                bg.setCornerRadius(0);
+                bg.setCornerRadius(dp(8));
                 if (i == activeDayIndex) {
                     bg.setColor(Color.parseColor(INK));
                     dayBtn.setTextColor(Color.WHITE);
@@ -2258,7 +2322,7 @@ public class MainActivity extends android.app.Activity {
         addField(form, "Name", name);
         addField(form, "Email", email);
         addField(form, "Role", role);
-        new AlertDialog.Builder(this).setTitle("Invite Traveler")
+        new AlertDialog.Builder(this).setTitle("Add Traveler")
                 .setView(scrollable(form)).setNegativeButton("Cancel", null)
                 .setPositiveButton("Add Traveler", (dialog, which) -> {
                     Traveler traveler = new Traveler();
@@ -2316,8 +2380,9 @@ public class MainActivity extends android.app.Activity {
                         activeTripId = selected.id;
                         activeDayIndex = 0;
                         showingTripLibrary = false;
-                        // Persist the switch so the web app opens the same trip.
-                        commit(user);
+                        // Trip selection is a preference for this device only.
+                        saveActiveTripSelection(user);
+                        renderDashboard(user);
                         toast("Switched to \"" + selected.name + "\"");
                     }
                 })
@@ -2451,6 +2516,7 @@ public class MainActivity extends android.app.Activity {
                     activeSection = SECTION_OVERVIEW;
                     showingTripLibrary = false;
                     weatherByTrip.remove(trip.id);
+                    saveActiveTripSelection(user);
                     commit(user);
                     toast(existing == null ? "Trip created." : "Trip details updated.");
                     dialog.dismiss();
@@ -2478,6 +2544,7 @@ public class MainActivity extends android.app.Activity {
                     savedTrips.remove(trip);
                     weatherByTrip.remove(trip.id);
                     activeTripId = firstActiveTripId();
+                    saveActiveTripSelection(user);
                     activeDayIndex = 0;
                     showingTripLibrary = true;
                     commit(user);
@@ -2696,6 +2763,40 @@ public class MainActivity extends android.app.Activity {
 
     // ------------------------------------------------------------- ui helpers
 
+    private String tripShareText(Trip trip) {
+        if (trip == null) return "";
+        StringBuilder summary = new StringBuilder();
+        summary.append("JourneySync trip: ").append(safeText(trip.name, "Trip")).append('\n');
+        if (trip.route != null && !trip.route.trim().isEmpty()) {
+            summary.append("Route: ").append(trip.route.trim()).append('\n');
+        }
+        summary.append("Dates: ").append(tripDateRange(trip)).append('\n');
+        summary.append("Travelers: ").append(Math.max(1, trip.travelersCount)).append("\n\nItinerary");
+        if (trip.days == null || trip.days.isEmpty()) summary.append("\n- No plans yet");
+        else for (int dayIndex = 0; dayIndex < trip.days.size(); dayIndex++) {
+            Day day = trip.days.get(dayIndex);
+            if (day == null) continue;
+            summary.append("\n\nDay ").append(dayIndex + 1).append(": ").append(safeText(day.label, "Plans"));
+            if (day.isoDate != null && !day.isoDate.isEmpty()) summary.append(" (").append(day.isoDate).append(')');
+            if (day.events == null || day.events.isEmpty()) summary.append("\n- No plans yet");
+            else for (DayEvent event : day.events) {
+                if (event == null) continue;
+                summary.append("\n- ").append(safeText(event.time, "Any time")).append(": ")
+                        .append(safeText(event.title, "Activity"));
+                if (event.meta != null && !event.meta.trim().isEmpty()) summary.append(" - ").append(event.meta.trim());
+            }
+        }
+        return summary.append("\n\nShared from JourneySync. This is a read-only trip summary.").toString();
+    }
+
+    private void shareTrip(Trip trip) {
+        Intent share = new Intent(Intent.ACTION_SEND);
+        share.setType("text/plain");
+        share.putExtra(Intent.EXTRA_SUBJECT, safeText(trip == null ? null : trip.name, "Trip") + " - JourneySync");
+        share.putExtra(Intent.EXTRA_TEXT, tripShareText(trip));
+        startActivity(Intent.createChooser(share, "Share trip summary"));
+    }
+
     private void showUtilityMenu(FirebaseUser user, Trip trip) {
         boolean completed = trip != null && trip.isCompleted(System.currentTimeMillis());
         String archiveAction = completed ? "COMPLETED (AUTO ARCHIVED)" : trip != null && trip.isManuallyArchived() ? "RESTORE TRIP" : "ARCHIVE TRIP";
@@ -2706,6 +2807,7 @@ public class MainActivity extends android.app.Activity {
                 "FLIGHT TRACKER",
                 "GUEST FLIGHT WATCH",
                 "TRAVELERS",
+                "SHARE TRIP SUMMARY",
                 "SWITCH TRIP (" + savedTrips.size() + ")",
                 "NEW TRIP",
                 "DELETE CURRENT TRIP",
@@ -2737,10 +2839,12 @@ public class MainActivity extends android.app.Activity {
                         activeSection = SECTION_TRAVELERS;
                         renderDashboard(user);
                     } else if (which == 6) {
-                        showTripSwitcherDialog(user);
+                        shareTrip(trip);
                     } else if (which == 7) {
-                        showCreateTripDialog(user);
+                        showTripSwitcherDialog(user);
                     } else if (which == 8) {
+                        showCreateTripDialog(user);
+                    } else if (which == 9) {
                         confirmDeleteTrip(user, trip);
                     } else {
                         signOut();
@@ -2752,14 +2856,9 @@ public class MainActivity extends android.app.Activity {
     private Button squareButton(String label) {
         Button button = new Button(this);
         button.setText(label);
+        styleButton(button, INK, "#263743", null, "#FFFFFF");
         button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
-        button.setTextColor(Color.WHITE);
-        button.setAllCaps(false);
         button.setPadding(0, 0, 0, 0);
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.parseColor(INK));
-        background.setCornerRadius(0);
-        button.setBackground(background);
         return button;
     }
 
@@ -2768,6 +2867,14 @@ public class MainActivity extends android.app.Activity {
         item.setOrientation(LinearLayout.VERTICAL);
         item.setGravity(Gravity.CENTER_HORIZONTAL);
         item.setClickable(true);
+        item.setFocusable(true);
+        item.setSelected(selected);
+        item.setContentDescription(label + (selected ? ", selected" : ""));
+        StateListDrawable navStates = new StateListDrawable();
+        navStates.addState(new int[]{android.R.attr.state_pressed}, roundedFill(CREAM, null));
+        navStates.addState(new int[]{}, roundedFill(SURFACE, null));
+        item.setBackground(navStates);
+
         item.setOnClickListener(v -> action.run());
 
         View indicator = new View(this);
@@ -2796,13 +2903,14 @@ public class MainActivity extends android.app.Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(14), dp(14), dp(12), dp(14));
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.parseColor(SURFACE));
-        background.setCornerRadius(0);
-        background.setStroke(dp(1), Color.parseColor(LINE));
-        row.setBackground(background);
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, roundedFill(CREAM, LINE));
+        states.addState(new int[]{}, roundedFill(SURFACE, LINE));
+        row.setBackground(states);
+        row.setFocusable(true);
         row.setClickable(true);
         row.setOnClickListener(v -> action.run());
+        row.setContentDescription(title + ". " + subtitle);
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
@@ -2858,11 +2966,7 @@ public class MainActivity extends android.app.Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(18), dp(16), dp(18), dp(16));
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.parseColor(SURFACE));
-        background.setCornerRadius(0);
-        background.setStroke(dp(1), Color.parseColor(LINE));
-        card.setBackground(background);
+        card.setBackground(roundedFill(SURFACE, LINE));
         return card;
     }
 
@@ -2875,7 +2979,7 @@ public class MainActivity extends android.app.Activity {
         badge.setPadding(dp(8), dp(3), dp(8), dp(3));
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.parseColor(bgColorHex));
-        bg.setCornerRadius(0);
+        bg.setCornerRadius(dp(20));
         badge.setBackground(bg);
         return badge;
     }
@@ -2956,17 +3060,8 @@ public class MainActivity extends android.app.Activity {
     private Button dangerButton(String label) {
         Button button = new Button(this);
         button.setText(label);
-        button.setTextColor(Color.parseColor(CORAL));
+        styleButton(button, SURFACE, "#FFF2EE", CORAL, CORAL);
         button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        button.setAllCaps(true);
-        button.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        button.setMinHeight(dp(48));
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.parseColor(SURFACE));
-        background.setCornerRadius(0);
-        background.setStroke(dp(2), Color.parseColor(CORAL));
-        button.setBackground(background);
-        button.setPadding(dp(14), dp(10), dp(14), dp(10));
         return button;
     }
 

@@ -18,6 +18,10 @@ const eslintConfig = defineConfig([
     // Vendored design reference, not our source. It is gitignored, so linting
     // it only ever failed the gate on code we do not maintain.
     "work/**",
+    // Generated Android output and third-party native assets are not authored
+    // or executed by the web build.
+    "android/**/build/**",
+    "android/app/src/main/assets/**",
   ]),
 ]);
 

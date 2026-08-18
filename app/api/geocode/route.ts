@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "../fetch-with-timeout";
+
 export const dynamic = "force-dynamic";
 
 type GeocodingResult = {
@@ -12,12 +14,13 @@ type GeocodingResult = {
   };
 };
 
+const SUCCESS_CACHE = "public, max-age=86400, s-maxage=2592000, stale-while-revalidate=604800";
+
 function json(body: unknown, status = 200): Response {
   return Response.json(body, {
     status,
     headers: {
-      "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
-      Pragma: "no-cache",
+      "Cache-Control": status >= 200 && status < 300 ? SUCCESS_CACHE : "no-store, max-age=0",
       "X-Content-Type-Options": "nosniff",
     },
   });
@@ -38,15 +41,15 @@ export async function GET(request: Request): Promise<Response> {
   if (countryCode) geocodingUrl.searchParams.set("countrycodes", countryCode.toLowerCase());
 
   try {
-    const response = await fetch(geocodingUrl, {
+    const response = await fetchWithTimeout(geocodingUrl, {
       cache: "no-store",
       headers: {
         Accept: "application/json",
         "Accept-Language": "en",
-        Referer: "https://journeysync-travel.manavdesai53.chatgpt.site/",
-        "User-Agent": "JourneySync/1.0 (https://journeysync-travel.manavdesai53.chatgpt.site/)",
+        Referer: "https://journeysync-travel-planner.manavdesai.workers.dev/",
+        "User-Agent": "JourneySync/1.1 (https://journeysync-travel-planner.manavdesai.workers.dev/)",
       },
-    });
+    }, 8_000);
     if (!response.ok) return json({ error: "The map location service is unavailable right now." }, 502);
     const body = await response.json() as GeocodingResult[];
     const location = body.find((result) => Number.isFinite(Number(result.lat)) && Number.isFinite(Number(result.lon)));

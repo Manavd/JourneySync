@@ -37,7 +37,7 @@ export async function generateMetadata(): Promise<Metadata> {
       apple: "/favicon.svg",
     },
     other: {
-      "theme-color": "#0c79d8",
+      "theme-color": "#17212b",
       "mobile-web-app-capable": "yes",
       "apple-mobile-web-app-capable": "yes",
       "apple-mobile-web-app-status-bar-style": "default",
