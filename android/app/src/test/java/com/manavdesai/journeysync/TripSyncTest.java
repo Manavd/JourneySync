@@ -74,6 +74,7 @@ public class TripSyncTest {
         trip.put("region", "Zurich");
         trip.put("city", "Zurich");
         trip.put("currency", "CHF");
+        trip.put("timeZone", "Europe/Zurich");
         trip.put("travelersCount", 4L);
         trip.put("days", new ArrayList<>(Arrays.asList(day)));
         Map<String, Object> expense = new LinkedHashMap<>();
@@ -107,6 +108,7 @@ public class TripSyncTest {
         assertEquals("Swiss Escape", trip.name);
         assertEquals(4, trip.travelersCount);
         assertEquals("CHF", trip.currency);
+        assertEquals("Europe/Zurich", trip.timeZone);
         assertEquals("2026-09-20", trip.endDate);
         assertEquals("2026-09-12", trip.days.get(0).isoDate);
 
@@ -165,6 +167,25 @@ public class TripSyncTest {
         Map<String, Object> writtenFlight = (Map<String, Object>) writtenEvent.get("flight");
         assertEquals("E52", writtenFlight.get("gate"));
         assertEquals(30, writtenFlight.get("delayMinutes"));
+    }
+
+    @Test
+    public void readsTripChatMembershipMetadata() {
+        Map<String, Object> chatMap = new LinkedHashMap<>();
+        chatMap.put("tripName", "Swiss Escape");
+        chatMap.put("tripRoute", "Zurich to Zermatt");
+        chatMap.put("ownerUid", "owner-1");
+        chatMap.put("ownerEmail", "owner@example.com");
+        chatMap.put("memberEmails", Arrays.asList("owner@example.com", "friend@example.com"));
+        chatMap.put("updatedAt", 1234L);
+
+        TripChat chat = TripChat.fromMap("swiss-escape", chatMap);
+        assertNotNull(chat);
+        assertEquals("swiss-escape", chat.id);
+        assertEquals("Swiss Escape", chat.tripName);
+        assertEquals(2, chat.memberEmails.size());
+        assertEquals("friend@example.com", chat.memberEmails.get(1));
+        assertEquals(1234L, chat.updatedAt);
     }
 
     @Test
@@ -289,8 +310,30 @@ public class TripSyncTest {
         assertEquals("CH", saved.get("countryCode"));
         assertEquals("Zurich", saved.get("city"));
         assertEquals("CHF", saved.get("currency"));
+        assertEquals("Europe/Zurich", saved.get("timeZone"));
         assertEquals("2026-08-10T12:00:00Z", saved.get("archivedAt"));
         trip.archivedAt = "";
         assertFalse(trip.toMap().containsKey("archivedAt"));
+    }
+    @Test
+    public void homeLocationAndWorldClockRoundTrip() {
+        Map<String, Object> profile = new LinkedHashMap<>();
+        profile.put("country", "United States");
+        profile.put("countryCode", "US");
+        profile.put("region", "Georgia");
+        profile.put("city", "Atlanta");
+        profile.put("timeZone", "America/New_York");
+        profile.put("source", "confirmed");
+
+        HomeLocation home = HomeLocation.fromMap(profile);
+
+        assertEquals("Atlanta, Georgia, United States", home.label());
+        assertEquals("America/New_York", home.timeZone);
+        assertTrue(home.isConfirmed());
+        assertEquals("America/New_York", home.toMap().get("timeZone"));
+        assertEquals(
+                "Destination is 6 hr ahead of home",
+                MainActivity.clockDifference(1767225600000L, "America/New_York", "Europe/Zurich")
+        );
     }
 }

@@ -12,6 +12,7 @@ import {
   onAuthStateChanged,
   doc,
   setDoc,
+  deleteDoc,
   onSnapshot,
   deleteField,
   getIdToken,
@@ -26,6 +27,8 @@ import {
   regionByCode,
 } from "./location-data";
 import TripMap from "./TripMap";
+import GroupChat, { GroupChatLauncher, TripChatSync } from "./GroupChat";
+import WorldClock from "./WorldClock";
 
 type FlightInfo = {
   number: string;
@@ -143,6 +146,7 @@ type Trip = {
   city?: string;
   currency?: string;
   archivedAt?: string;
+  timeZone?: string;
 };
 
 type WeatherDay = {
@@ -163,6 +167,8 @@ type WeatherForecast = {
   source?: string;
   latitude?: number;
   longitude?: number;
+  timeZone?: string;
+  utcOffsetSeconds?: number | null;
 };
 
 type TripCache = {
@@ -586,9 +592,10 @@ export default function Home() {
   // App Data State - Multi-Trip Architecture
   const [savedTrips, setSavedTrips] = useState<Trip[]>([]);
   const [activeTripId, setActiveTripId] = useState("");
-  const [appView, setAppView] = useState<"trips" | "trip">("trips");
+  const [appView, setAppView] = useState<"trips" | "trip" | "chat">("trips");
   const [libraryFilter, setLibraryFilter] = useState<"active" | "archived">("active");
   const [pendingDeleteTripId, setPendingDeleteTripId] = useState<string | null>(null);
+  const [selectedChatId, setSelectedChatId] = useState("");
 
   const activeTrips = useMemo(() => savedTrips
     .filter((trip) => !trip.archivedAt && !isTripCompleted(trip))
@@ -969,6 +976,13 @@ export default function Home() {
       .then((forecast) => {
         setWeatherForecast(forecast);
         setWeatherLocationKey(requestedWeatherKey);
+        if (forecast.timeZone && activeTrip?.id) {
+          setSavedTrips((trips) => trips.map((trip) =>
+            trip.id === activeTrip.id && trip.timeZone !== forecast.timeZone
+              ? { ...trip, timeZone: forecast.timeZone }
+              : trip,
+          ));
+        }
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -1355,6 +1369,11 @@ export default function Home() {
     const name = pendingDeleteTrip.name;
     const remainingTrips = savedTrips.filter((trip) => trip.id !== id);
     const nextActiveTrip = remainingTrips.find((trip) => !trip.archivedAt && !isTripCompleted(trip)) || remainingTrips[0];
+    if (user) {
+      void deleteDoc(doc(db, "trip_chats", id)).catch((error) => {
+        console.error("Could not close the deleted trip chat:", error);
+      });
+    }
     setSavedTrips(remainingTrips);
     if (activeTripId === id) {
       setActiveTripId(nextActiveTrip?.id ?? "");
@@ -1842,8 +1861,12 @@ export default function Home() {
     if (!requireSignIn("add a traveler")) return;
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") || "New Traveler");
-    const email = String(form.get("email") || "traveler@example.com");
+    const email = String(form.get("email") || "").trim().toLowerCase();
     const role = String(form.get("role") || "Traveler");
+    if (travelersList.some((traveler) => traveler.email.trim().toLowerCase() === email)) {
+      notify("That traveler email is already on this trip.");
+      return;
+    }
     const avatar = name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "TR";
     const bg = ["peach", "blue", "green", "coral"][travelersList.length % 4];
 
@@ -1987,9 +2010,30 @@ export default function Home() {
     );
   }
 
+  if (appView === "chat") {
+    return (
+      <main className="trip-library-shell chat-page-shell">
+        <TripChatSync user={user} trips={savedTrips} />
+        <header className="trip-library-header">
+          <div className="auth-gate-brand"><span className="brand-mark">J</span><strong>JourneySync</strong></div>
+          <div className="trip-library-account">
+            <span className="avatar avatar-me">{(user.displayName || user.email || "JS").slice(0, 2).toUpperCase()}</span>
+            <span><strong>{user.displayName || user.email?.split("@")[0] || "Traveler"}</strong><small>Secure Firebase group chat</small></span>
+            <button type="button" onClick={() => setAppView("trips")}>← All trips</button>
+          </div>
+        </header>
+        <section className="trip-library-content chat-page-content">
+          <GroupChat user={user} trips={savedTrips} initialChatId={selectedChatId} />
+        </section>
+        {toast && <div className="toast" role="status">{toast}</div>}
+      </main>
+    );
+  }
+
   if (appView === "trips") {
     return (
       <main className="trip-library-shell">
+        <TripChatSync user={user} trips={savedTrips} />
         <header className="trip-library-header">
           <div className="auth-gate-brand"><span className="brand-mark">J</span><strong>JourneySync</strong></div>
           <div className="trip-library-account">
@@ -2061,6 +2105,15 @@ export default function Home() {
               )}
             </div>
           )}
+
+          <GroupChatLauncher
+            user={user}
+            trips={savedTrips}
+            onOpen={(chatId) => {
+              setSelectedChatId(chatId);
+              setAppView("chat");
+            }}
+          />
         </section>
 
         {plannerOpen === "trip" && (
@@ -2094,6 +2147,7 @@ export default function Home() {
 
   return (
     <main className="app-shell">
+      <TripChatSync user={user} trips={savedTrips} />
       {/* Mobile Overlay Drawer backdrop */}
       {mobileMenuOpen && (
         <div className="sidebar-overlay" onClick={() => setMobileMenuOpen(false)} />
@@ -2112,6 +2166,7 @@ export default function Home() {
             ["≡", "Itinerary"],
             ["✈", "Flight Tracker"],
             ["◎", "Guest Flights"],
+            ["••", "Group Chat"],
             ["◇", "Map"],
             ["¤", "Expenses"],
             ["▣", "Wallet"],
@@ -2120,6 +2175,7 @@ export default function Home() {
               className={activeNav === label ? "nav-item active" : "nav-item"}
               key={label}
               onClick={() => {
+                if (label === "Group Chat") setSelectedChatId(activeTrip?.id || selectedChatId);
                 setActiveNav(label);
                 setMobileMenuOpen(false);
               }}
@@ -2215,7 +2271,7 @@ export default function Home() {
               <div className="notifications-popover">
                 <div className="notifications-header">
                   <h3>Trip Notifications</h3>
-                  <button style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "11px", color: "var(--coral)" }} onClick={() => setNotificationsOpen(false)}>Close</button>
+                  <button style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "11px", color: "var(--accent-pressed)" }} onClick={() => setNotificationsOpen(false)}>Close</button>
                 </div>
                 {mainArrivalEvent && (
                   <div className="notification-item">
@@ -2362,6 +2418,17 @@ export default function Home() {
                     <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "🌐"}</i><b>☁</b></div>
                     <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Precip. {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
                   </button>
+
+                  <WorldClock
+                    user={user}
+                    destination={{
+                      city: tripCity,
+                      region: tripRegion,
+                      country: tripCountry,
+                      countryCode: inferredCountryCode,
+                      timeZone: activeTrip?.timeZone || (weatherIsCurrent ? weatherForecast?.timeZone : ""),
+                    }}
+                  />
 
                   <section className="expense-card">
                     <div className="rail-heading"><span>EXPENSES SNAPSHOT</span><button onClick={() => openMutationPanel("expense")}>＋</button></div>
@@ -2556,6 +2623,12 @@ export default function Home() {
                 </div>
               )}
               <p className="tracker-note">AeroDataBox supplies live operational updates, falling back to AviationStack; JourneySync saves the latest result to your Firebase account.</p>
+            </div>
+          )}
+
+          {activeNav === "Group Chat" && (
+            <div className="view-fade">
+              <GroupChat user={user} trips={savedTrips} initialChatId={activeTrip?.id || selectedChatId} />
             </div>
           )}
 
@@ -3110,7 +3183,7 @@ export default function Home() {
               <button className="primary-action" style={{ margin: 0, padding: "6px 12px", fontSize: "11px" }}>Add to Team</button>
             </form>
 
-            <p className="modal-copy">People listed here are saved with this trip. Sharing sends a read-only itinerary summary and does not grant access to your account.</p>
+            <p className="modal-copy">A traveler account email grants access to this trip&apos;s live group chat. The itinerary and the rest of your account stay private to you.</p>
             <button type="button" className="secondary-action" onClick={() => void shareActiveTrip()}>
               Share Trip Summary
             </button>
@@ -3289,9 +3362,9 @@ export default function Home() {
             <div style={{ display: "grid", gap: "10px", marginBottom: "20px", maxHeight: "280px", overflowY: "auto" }}>
               {activeTrips.length === 0 && <p className="modal-copy">No active or upcoming trips. Open the trip dashboard to view Archived.</p>}
               {activeTrips.map((t) => (
-                <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", background: activeTripId === t.id ? "#fff7ed" : "#f8fafc", border: activeTripId === t.id ? "1.5px solid var(--coral)" : "1px solid var(--line)", borderRadius: "8px" }}>
+                <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", background: activeTripId === t.id ? "var(--accent-soft)" : "#f8fafc", border: activeTripId === t.id ? "1.5px solid var(--accent)" : "1px solid var(--line)", borderRadius: "8px" }}>
                   <button type="button" onClick={() => { setActiveTripId(t.id); setActiveDay(0); setPlannerOpen(null); notify(`Switched to "${t.name}"`); }} style={{ flex: 1, border: 0, padding: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}>
-                    <strong style={{ fontSize: "13px", display: "block", color: activeTripId === t.id ? "var(--coral)" : "#0f172a" }}>{t.name} {activeTripId === t.id && "(Active)"}</strong>
+                    <strong style={{ fontSize: "13px", display: "block", color: activeTripId === t.id ? "var(--accent-pressed)" : "#0f172a" }}>{t.name} {activeTripId === t.id && "(Active)"}</strong>
                     <small style={{ fontSize: "10px", color: "#64748b" }}>{t.route} · {t.days.length} Day{t.days.length === 1 ? "" : "s"} · {t.travelersCount} Traveler{t.travelersCount === 1 ? "" : "s"}</small>
                   </button>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
@@ -3305,7 +3378,7 @@ export default function Home() {
                         Archive
                       </button>
                     )}
-                    <b style={{ fontSize: "16px", color: activeTripId === t.id ? "var(--coral)" : "#cbd5e1" }}>›</b>
+                    <b style={{ fontSize: "16px", color: activeTripId === t.id ? "var(--accent-pressed)" : "#cbd5e1" }}>›</b>
                   </div>
                 </div>
               ))}

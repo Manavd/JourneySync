@@ -17,7 +17,10 @@
   --success: #1d7a48; /* success */
   --success-on-dark: #73c994; /* successOnDark */
   --warning: #d97706; /* warning */
-  --accent: #7c3aed; /* accent */
   --danger: #e53e3e; /* danger */
+  --purple: #7c3aed; /* purple */
+  --accent: #89b8d8; /* accent */
+  --accent-pressed: #6f9fbe; /* accentPressed */
+  --accent-soft: #e7f2f8; /* accentSoft */
   --radius-card: 10px; /* card */
 }

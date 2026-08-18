@@ -36,7 +36,7 @@ final class DesignTokens {
     /** Brand accent, selected state, and the delayed-flight signal. */
     static final String CORAL = "#EF7159"; // coral
 
-    /** Pressed state for coral buttons. */
+    /** Pressed state for coral buttons. Currently unused: coral moved to warnings and destructive actions only, and those surfaces have no pressed variant yet. */
     static final String CORAL_PRESSED = "#D85C45"; // coralPressed
 
     /** Soft positive fill. */
@@ -54,11 +54,17 @@ final class DesignTokens {
     /** Caution state, short of an outright delay. */
     static final String ORANGE = "#D97706"; // warning
 
-    /** Secondary categorical accent. */
-    static final String PURPLE = "#7C3AED"; // accent
-
     /** Destructive actions: delete an expense, a wallet document, a traveler. */
     static final String DANGER = "#E53E3E"; // danger
+
+    /** Secondary categorical accent. Renamed from --accent on the web when the interactive accent moved to blue; the Android name was already PURPLE. */
+    static final String PURPLE = "#7C3AED"; // purple
+
+    /** Pressed state for the interactive accent. */
+    static final String BLUE_PRESSED = "#6F9FBE"; // accentPressed
+
+    /** Tinted fill behind the interactive accent. */
+    static final String BLUE_SOFT = "#E7F2F8"; // accentSoft
 
     /** Corner radius for cards and the embedded trip map. */
     static final int RADIUS_DP = 10; // card
