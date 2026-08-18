@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
-    "start": "vinext start",
+    "start": "node scripts/start.mjs",
     "test": "npm run tokens:check && npm run lint && npm run typecheck && npm run build && node --test tests/rendered-html.test.mjs",
     "tokens": "node scripts/generate-design-tokens.mjs",
     "tokens:check": "node scripts/generate-design-tokens.mjs --check",

@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "../../fetch-with-timeout";
+
 export const dynamic = "force-dynamic";
 
 // Live flight data comes from AeroDataBox first, with AviationStack as a
@@ -253,7 +255,7 @@ function providerHeaders(apiKey: string, apiHost: string): HeadersInit {
 async function providerJson(url: URL, apiKey: string, apiHost: string): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetch(url, { headers: providerHeaders(apiKey, apiHost) });
+    response = await fetchWithTimeout(url, { headers: providerHeaders(apiKey, apiHost) }, 12_000);
   } catch {
     throw new Error("unreachable");
   }
@@ -387,7 +389,7 @@ function aviationNormalizedFlight(entry: AviationFlight, departureDate: string, 
 async function aviationJson(url: URL): Promise<AviationFlight[]> {
   let response: Response;
   try {
-    response = await fetch(url, { headers: { Accept: "application/json" } });
+    response = await fetchWithTimeout(url, { headers: { Accept: "application/json" } }, 12_000);
   } catch {
     throw new Error("unreachable");
   }
@@ -495,11 +497,11 @@ async function requireFirebaseUser(request: Request): Promise<string | null> {
   const firebaseApiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
   if (!token || !firebaseApiKey) return null;
 
-  const response = await fetch(`${FIREBASE_LOOKUP_URL}?key=${encodeURIComponent(firebaseApiKey)}`, {
+  const response = await fetchWithTimeout(`${FIREBASE_LOOKUP_URL}?key=${encodeURIComponent(firebaseApiKey)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ idToken: token }),
-  });
+  }, 8_000);
   if (!response.ok) return null;
 
   const data = (await response.json()) as { users?: Array<{ localId?: string }> };

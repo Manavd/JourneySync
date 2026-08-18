@@ -66,7 +66,7 @@ export default function TripMap({
       .then(() => {
         setResolvedCenter(null);
         setMapError("");
-        return fetch(`/api/geocode?${query.toString()}`, { cache: "no-store", signal: controller.signal });
+        return fetch(`/api/geocode?${query.toString()}`, { signal: controller.signal });
       })
       .then(async (response) => {
         const body = await response.json() as Coordinates & { error?: string };
@@ -146,7 +146,9 @@ export default function TripMap({
         markersRef.current.clear();
         map.remove();
       };
-    }).catch(() => setMapError("The interactive map could not load. Refresh and try again."));
+    }).catch(() => {
+      if (!cancelled) setMapError("The interactive map could not load. Refresh and try again.");
+    });
 
     return () => {
       cancelled = true;
@@ -166,8 +168,8 @@ export default function TripMap({
   }, [selectedName, pointKey]);
 
   if (!location) return <div className="trip-map-status" role="alert">Choose a city in trip details to show its map.</div>;
-  if (!center && mapError) return <div className="trip-map-status" role="alert">{mapError}</div>;
+  if (mapError) return <div className="trip-map-status" role="alert">{mapError}</div>;
   if (!effectiveCenter) return <div className="trip-map-status" aria-live="polite">Locating {location}…</div>;
 
-  return <div ref={mapElementRef} className="trip-map" aria-label={`Interactive map of ${location}`} />;
+  return <div ref={mapElementRef} className="trip-map" role="region" aria-label={`Interactive map of ${location}`} />;
 }

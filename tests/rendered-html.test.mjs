@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 async function render(path = "/", init = {}) {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -25,6 +27,10 @@ test("server-renders the JourneySync travel application", async () => {
   const response = await render("/", { headers: { accept: "text/html" } });
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
+  assert.match(response.headers.get("permissions-policy") ?? "", /camera=\(\)/i);
 
   const html = await response.text();
   assert.match(html, /JourneySync/i);
@@ -56,11 +62,67 @@ test("server-renders the JourneySync travel application", async () => {
   assert.match(pageBundle, /Finding place/i);
   assert.match(pageBundle, /Choose an end date on or after the start date/i);
   assert.match(pageBundle, /journeysync_trips_/i);
+  assert.match(pageBundle, /Share Trip Summary/i);
+  assert.match(pageBundle, /Firebase did not respond within 8 seconds/i);
+  assert.match(pageBundle, /Retry Firebase Connection/i);
+  assert.doesNotMatch(pageBundle, /Copy Invite Link/i);
   assert.doesNotMatch(pageBundle, /journeysync_all_trips/i);
   assert.doesNotMatch(pageBundle, /journeysync_mock_user/i);
 });
 
-test("map geocoding resolves saved places without caching", async () => {
+test("production start serves built browser assets", { timeout: 15_000 }, async () => {
+  const projectRoot = fileURLToPath(new URL("../", import.meta.url));
+  const startScript = fileURLToPath(new URL("../scripts/start.mjs", import.meta.url));
+  const child = spawn(process.execPath, [
+    startScript,
+    "--port",
+    "0",
+    "--hostname",
+    "127.0.0.1",
+  ], {
+    cwd: projectRoot,
+    env: process.env,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+
+  try {
+    const serverUrl = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Production server did not start. Output: ${output}`));
+      }, 10_000);
+      const collect = (chunk) => {
+        output += chunk.toString();
+        const match = output.match(/Production server running at (http:\/\/\S+)/);
+        if (match) {
+          clearTimeout(timer);
+          resolve(match[1]);
+        }
+      };
+      child.stdout.on("data", collect);
+      child.stderr.on("data", collect);
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        reject(new Error(`Production server exited with code ${code}. Output: ${output}`));
+      });
+    });
+
+    const pageResponse = await fetch(serverUrl);
+    assert.equal(pageResponse.status, 200);
+    const html = await pageResponse.text();
+    const assetPath = html.match(/href="(\/assets\/[^"]+\.(?:css|js))"/)?.[1];
+    assert.ok(assetPath, "expected a browser asset in the rendered page");
+
+    const assetResponse = await fetch(new URL(assetPath, serverUrl));
+    assert.equal(assetResponse.status, 200);
+    assert.match(assetResponse.headers.get("content-type") ?? "", /(?:text\/css|javascript)/i);
+  } finally {
+    child.kill();
+  }
+});
+
+test("map geocoding resolves saved places with durable public caching", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = async (input) => {
@@ -79,8 +141,8 @@ test("map geocoding resolves saved places without caching", async () => {
 
     const response = await render("/api/geocode?q=Millennium%20Park%2C%20Chicago&countryCode=US");
     assert.equal(response.status, 200);
-    assert.match(response.headers.get("cache-control") ?? "", /no-store/i);
-    assert.match(response.headers.get("cache-control") ?? "", /no-cache/i);
+    assert.match(response.headers.get("cache-control") ?? "", /public/i);
+    assert.match(response.headers.get("cache-control") ?? "", /s-maxage=2592000/i);
     const body = await response.json();
     assert.equal(body.name, "Millennium Park");
     assert.equal(body.latitude, 41.8826);
@@ -100,7 +162,7 @@ test("release endpoint is never cached and reports the deployed build", async ()
   assert.ok(body.version.length > 0);
 });
 
-test("weather endpoint geocodes the selected city and returns a no-cache forecast", async () => {
+test("weather endpoint geocodes the selected city and returns a short-lived cached forecast", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = async (input) => {
@@ -138,7 +200,8 @@ test("weather endpoint geocodes the selected city and returns a no-cache forecas
 
     const response = await render("/api/weather?city=Atlanta&region=Georgia&country=United%20States&countryCode=US");
     assert.equal(response.status, 200);
-    assert.match(response.headers.get("cache-control") ?? "", /no-store/i);
+    assert.match(response.headers.get("cache-control") ?? "", /max-age=600/i);
+    assert.match(response.headers.get("cache-control") ?? "", /s-maxage=900/i);
     const body = await response.json();
     assert.equal(body.destination, "Atlanta");
     assert.equal(body.days[0].high, "91°F");
@@ -187,7 +250,7 @@ test("weather endpoint falls back to 7Timer when Open-Meteo forecast is unavaila
 
     const response = await render("/api/weather?city=Chicago&region=Illinois&country=United%20States&countryCode=US");
     assert.equal(response.status, 200);
-    assert.match(response.headers.get("cache-control") ?? "", /no-store/i);
+    assert.match(response.headers.get("cache-control") ?? "", /s-maxage=900/i);
     const body = await response.json();
     assert.equal(body.destination, "Chicago");
     assert.equal(body.days[0].high, "77°F");
@@ -221,6 +284,22 @@ test("Firestore rules isolate each user's profile data", async () => {
   assert.match(rules, /request\.auth\s*!=\s*null/);
   assert.match(rules, /request\.auth\.uid\s*==\s*userId/);
   assert.doesNotMatch(rules, /allow\s+(?:read|write|read,\s*write)\s*:\s*if\s+true/);
+});
+
+test("native Android app bundles its map UI and shares summaries safely", async () => {
+  const source = await readFile(new URL(
+    "../android/app/src/main/java/com/manavdesai/journeysync/MainActivity.java",
+    import.meta.url,
+  ), "utf8");
+  const manifest = await readFile(new URL("../android/app/src/main/AndroidManifest.xml", import.meta.url), "utf8");
+  const leaflet = await readFile(new URL("../android/app/src/main/assets/leaflet/leaflet.js", import.meta.url));
+
+  assert.match(source, /file:\/\/\/android_asset\/leaflet\//);
+  assert.match(source, /Intent\.ACTION_SEND/);
+  assert.match(source, /FieldValue\.delete\(\)/);
+  assert.doesNotMatch(source, /unpkg\.com/);
+  assert.match(manifest, /android:allowBackup="false"/);
+  assert.ok(leaflet.byteLength > 100_000, "expected bundled Leaflet runtime");
 });
 
 test("route search returns normalized AeroDataBox flight information", async () => {

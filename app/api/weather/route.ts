@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "../fetch-with-timeout";
+
 export const dynamic = "force-dynamic";
 
 type GeocodingResult = {
@@ -42,11 +44,13 @@ type WeatherDay = {
   desc: string;
 };
 
+const SUCCESS_CACHE = "public, max-age=600, s-maxage=900, stale-while-revalidate=1800";
+
 function json(body: unknown, status = 200): Response {
   return Response.json(body, {
     status,
     headers: {
-      "Cache-Control": "no-store, max-age=0",
+      "Cache-Control": status >= 200 && status < 300 ? SUCCESS_CACHE : "no-store, max-age=0",
       "X-Content-Type-Options": "nosniff",
     },
   });
@@ -149,7 +153,7 @@ async function fetchSevenTimerForecast(latitude: number, longitude: number, coun
   forecastUrl.searchParams.set("lon", longitude.toFixed(3));
   forecastUrl.searchParams.set("product", "civillight");
   forecastUrl.searchParams.set("output", "json");
-  const response = await fetch(forecastUrl, { cache: "no-store", headers: { Accept: "application/json" } });
+  const response = await fetchWithTimeout(forecastUrl, { cache: "no-store", headers: { Accept: "application/json" } }, 8_000);
   if (!response.ok) throw new Error(`7Timer returned ${response.status}`);
   const days = sevenTimerDays((await response.json()) as SevenTimerResponse, countryCode);
   if (days.length === 0) throw new Error("7Timer returned no forecast days");
@@ -174,7 +178,7 @@ export async function GET(request: Request): Promise<Response> {
   if (countryCode) geocodingUrl.searchParams.set("countryCode", countryCode);
 
   try {
-    const geocodingResponse = await fetch(geocodingUrl, { cache: "no-store" });
+    const geocodingResponse = await fetchWithTimeout(geocodingUrl, { cache: "no-store" }, 8_000);
     if (!geocodingResponse.ok) return json({ error: "The selected city could not be located right now." }, 502);
     const geocoding = (await geocodingResponse.json()) as GeocodingResponse;
     const results = Array.isArray(geocoding.results) ? geocoding.results : [];
@@ -198,7 +202,7 @@ export async function GET(request: Request): Promise<Response> {
     let days: WeatherDay[] = [];
     let source = "Open-Meteo";
     try {
-      const forecastResponse = await fetch(forecastUrl, { cache: "no-store" });
+      const forecastResponse = await fetchWithTimeout(forecastUrl, { cache: "no-store" }, 8_000);
       if (!forecastResponse.ok) throw new Error(`Open-Meteo returned ${forecastResponse.status}`);
       days = openMeteoDays((await forecastResponse.json()) as ForecastResponse);
       if (days.length === 0) throw new Error("Open-Meteo returned no forecast days");

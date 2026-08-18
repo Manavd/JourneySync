@@ -31,8 +31,8 @@ button { color: inherit; }
 .auth-gate-intro h1 { max-width: 620px; margin: 20px 0 24px; color: #fff; font-size: clamp(54px, 7vw, 94px); line-height: .94; }
 .auth-gate-intro p { max-width: 560px; margin: 0; color: #adbac2; font-size: clamp(14px, 1.4vw, 18px); line-height: 1.65; }
 .auth-gate-intro > small { position: relative; z-index: 1; color: #7f919c; font-size: 10px; letter-spacing: .04em; }
-.auth-gate-panel { min-height: 100vh; padding: clamp(28px, 6vw, 90px); display: grid; place-items: center; background: var(--paper); }
-.auth-card { width: min(420px, 100%); }
+.auth-gate-panel { min-width: 0; min-height: 100vh; padding: clamp(28px, 6vw, 90px); display: grid; place-items: center; background: var(--paper); }
+.auth-card { width: min(420px, 100%); min-width: 0; }
 .auth-card > h2 { margin: 9px 0 8px; font-family: Georgia, serif; font-size: clamp(36px, 4vw, 48px); font-weight: 500; letter-spacing: -.035em; }
 .auth-card > p { margin: 0 0 28px; color: #72808a; font-size: 12px; line-height: 1.5; }
 .auth-card form label { display: block; margin-bottom: 15px; color: #4d5961; font-size: 9px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
@@ -44,6 +44,9 @@ button { color: inherit; }
 .auth-gate-loading h1 { margin: 4px 0 0; color: #fff; font-size: 44px; }
 .auth-gate-loading p { margin: 0; color: #9fb0ba; font-size: 12px; }
 .auth-loader { width: 42px; height: 42px; border: 3px solid rgba(255,255,255,.16); border-top-color: var(--coral); border-radius: 50%; animation: auth-spin .8s linear infinite; }
+.auth-recovery-actions { width: min(320px, 100%); margin-top: 4px; }
+.auth-gate-loading .auth-recovery-actions .secondary-action { border-color: rgba(255,255,255,.3); color: #dbe5ea; }
+.auth-gate-loading .auth-recovery-actions .secondary-action:hover { background: rgba(255,255,255,.08); }
 @keyframes auth-spin { to { transform: rotate(360deg); } }
 
 .trip-library-shell { min-height: 100vh; background: var(--cream); }
@@ -145,6 +148,9 @@ button { color: inherit; }
 .trip-switcher button { border: 0; background: none; color: #78848c; cursor: pointer; transition: color 0.15s; }
 .trip-switcher button:hover { color: var(--coral); }
 .top-actions { display: flex; align-items: center; gap: 18px; }
+.trip-current-button { padding: 0; text-align: left; font: inherit; }
+.traveler-button { border: 0; background: transparent; padding: 0; cursor: pointer; }
+.trip-switcher button:focus-visible, .traveler-button:focus-visible, .share-button:focus-visible, .weather-card:focus-visible { outline: 3px solid rgba(239,113,89,.35); outline-offset: 3px; }
 .icon-button { width: 30px; height: 30px; border: 0; background: transparent; font-size: 9px; color: #6c7a83; position: relative; cursor: pointer; }
 .icon-button::before { content: "◡"; font-size: 24px; position: absolute; inset: -6px 0 0; transform: rotate(180deg); }
 .icon-button i { width: 6px; height: 6px; border-radius: 50%; background: var(--coral); position: absolute; right: 2px; top: 2px; border: 1px solid white; }
@@ -243,9 +249,9 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
 .event-card > b { font-size: 17px; color: #8d989e; font-weight: 400; }
 
 .right-rail { display: grid; gap: 17px; align-content: start; }
-.right-rail > section { border: 1px solid var(--line); border-radius: 8px; background: rgba(255,253,248,.67); padding: 19px; transition: box-shadow 0.2s; }
-.right-rail > section:hover { box-shadow: 0 8px 24px rgba(27,39,49,.05); }
-.weather-card { display: grid; grid-template-columns: 1fr auto; }
+.right-rail > section, .right-rail > button { border: 1px solid var(--line); border-radius: 8px; background: rgba(255,253,248,.67); padding: 19px; transition: box-shadow 0.2s; }
+.right-rail > section:hover, .right-rail > button:hover { box-shadow: 0 8px 24px rgba(27,39,49,.05); }
+.weather-card { display: grid; grid-template-columns: 1fr auto; width: 100%; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .weather-card small, .weather-card strong, .weather-card span { display: block; }
 .weather-card small { color: #89939a; font-size: 7px; letter-spacing: .12em; font-weight: 800; }
 .weather-card strong { font-family: Georgia, serif; font-size: 34px; font-weight: 500; margin: 10px 0 2px; }
@@ -510,7 +516,8 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
 @media (max-width: 760px) {
   .auth-gate { grid-template-columns: 1fr; }
   .auth-gate-intro { display: none; }
-  .auth-gate-panel { min-height: 100vh; padding: 34px 22px; }
+  .auth-gate-panel { width: 100%; min-width: 0; min-height: 100vh; padding: 34px 22px; }
+  .auth-card { width: 100%; }
   .auth-card > h2 { font-size: 38px; }
   .trip-library-header { padding: 14px 18px; }
   .trip-library-account > span:nth-child(2) { display: none; }

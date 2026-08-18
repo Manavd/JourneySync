@@ -13,6 +13,7 @@ import {
   doc,
   setDoc,
   onSnapshot,
+  deleteField,
   getIdToken,
   User 
 } from "./firebase";
@@ -243,8 +244,8 @@ function tripsFromCloud(data: Record<string, unknown> | undefined): TripCache {
   return normalizeTripCache(savedTrips, activeTripId, timestampMillis(data?.updatedAt));
 }
 
-function tripCachePayload(cache: TripCache): string {
-  return JSON.stringify({ savedTrips: cache.savedTrips, activeTripId: cache.activeTripId });
+function tripDataPayload(savedTrips: Trip[]): string {
+  return JSON.stringify({ savedTrips });
 }
 
 const iconFor = {
@@ -297,6 +298,34 @@ function tripEndDate(trip: Trip): Date | null {
     return fallback;
   });
   return dayDates.reduce((latest, date) => date.getTime() > latest.getTime() ? date : latest, configuredEnd);
+}
+
+function buildTripSummary(trip: Trip): string {
+  const end = tripEndDate(trip);
+  const dateRange = end
+    ? `${formatTripStartDate(trip.startDate)} to ${new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }).format(end)}`
+    : formatTripStartDate(trip.startDate);
+  const lines = [
+    `JourneySync trip: ${trip.name}`,
+    trip.route ? `Route: ${trip.route}` : "",
+    `Dates: ${dateRange}`,
+    `Travelers: ${trip.travelersCount}`,
+    "",
+    "Itinerary",
+  ].filter(Boolean);
+  for (const [index, day] of trip.days.entries()) {
+    lines.push("", `Day ${index + 1}: ${day.label}${day.isoDate ? ` (${day.isoDate})` : ""}`);
+    if (day.events.length === 0) lines.push("- No plans yet");
+    for (const event of day.events) {
+      lines.push(`- ${event.time}: ${event.title}${event.meta ? ` - ${event.meta}` : ""}`);
+    }
+  }
+  lines.push("", "Shared from JourneySync. This is a read-only trip summary.");
+  return lines.join("\n");
 }
 
 function isTripCompleted(trip: Trip, now = new Date()): boolean {
@@ -542,6 +571,7 @@ export default function Home() {
   const [authPassword, setAuthPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
+  const [profileLoadSlow, setProfileLoadSlow] = useState(false);
   const [cloudReady, setCloudReady] = useState(false);
   const [authError, setAuthError] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -644,7 +674,26 @@ export default function Home() {
   // Auth Listener & Firestore Sync
   useEffect(() => {
     let unsubscribeCloud = () => {};
+    let profileTimeout: ReturnType<typeof setTimeout> | null = null;
+    let authResolved = false;
+    const clearProfileTimeout = () => {
+      if (profileTimeout) {
+        clearTimeout(profileTimeout);
+        profileTimeout = null;
+      }
+    };
+    const authTimeout = setTimeout(() => {
+      if (authResolved) return;
+      setAuthChecking(false);
+      setAuthError(
+        "Firebase did not respond within 8 seconds. Check your connection and try signing in. JourneySync will still open your session if Firebase reconnects."
+      );
+    }, 8_000);
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      authResolved = true;
+      clearTimeout(authTimeout);
+      clearProfileTimeout();
       unsubscribeCloud();
       unsubscribeCloud = () => {};
 
@@ -661,9 +710,11 @@ export default function Home() {
       setSynced(true);
       setOfflineCachedAt(null);
       setProfileReady(false);
+      setProfileLoadSlow(false);
       baselineRef.current = null;
       setUser(currentUser);
       setAuthChecking(false);
+      setAuthError("");
 
       if (!currentUser) {
         setSavedTrips([]);
@@ -673,12 +724,11 @@ export default function Home() {
         return;
       }
 
-      setAuthError("");
       const uid = currentUser.uid;
       const cached = readLocalTrips(uid);
       if (cached) {
         const normalizedCache = normalizeTripCache(cached.savedTrips, cached.activeTripId, cached.updatedAt);
-        baselineRef.current = { uid, payload: tripCachePayload(normalizedCache), updatedAt: normalizedCache.updatedAt };
+        baselineRef.current = { uid, payload: tripDataPayload(normalizedCache.savedTrips), updatedAt: normalizedCache.updatedAt };
         setSavedTrips(normalizedCache.savedTrips);
         setActiveTripId(normalizedCache.activeTripId);
         setOfflineCachedAt(normalizedCache.updatedAt > 0 ? new Date(normalizedCache.updatedAt).toISOString() : null);
@@ -687,15 +737,30 @@ export default function Home() {
         setSavedTrips([]);
         setActiveTripId("");
       }
+      if (!cached) {
+        profileTimeout = setTimeout(() => {
+          if (activeUidRef.current !== uid) return;
+          setProfileLoadSlow(true);
+        }, 8_000);
+      }
 
       const docRef = doc(db, "users", uid, "user_trips", "all_trips");
       unsubscribeCloud = onSnapshot(docRef, (snap) => {
         if (activeUidRef.current !== uid) return;
+        clearProfileTimeout();
+        setProfileLoadSlow(false);
         const cloud = tripsFromCloud(snap.exists() ? (snap.data() as Record<string, unknown>) : undefined);
         const latestLocal = readLocalTrips(uid);
-        const selected = latestLocal && latestLocal.updatedAt > cloud.updatedAt ? latestLocal : cloud;
-        const cloudPayload = tripCachePayload(cloud);
-        const selectedPayload = tripCachePayload(selected);
+        const localTripsAreNewer = !!latestLocal && latestLocal.updatedAt > cloud.updatedAt;
+        const selectedTrips = localTripsAreNewer ? latestLocal.savedTrips : cloud.savedTrips;
+        const selectedUpdatedAt = localTripsAreNewer ? latestLocal.updatedAt : cloud.updatedAt;
+        // The active trip is navigation state, not account data. Preserve this
+        // device's choice and only use the old cloud field as a migration
+        // fallback for devices without a local preference.
+        const preferredActiveId = latestLocal?.activeTripId || cloud.activeTripId;
+        const selected = normalizeTripCache(selectedTrips, preferredActiveId, selectedUpdatedAt);
+        const cloudPayload = tripDataPayload(cloud.savedTrips);
+        const selectedPayload = tripDataPayload(selected.savedTrips);
 
         // Keep the cloud payload as the comparison baseline. If a newer device
         // copy won, the sync effect below sees the difference and uploads it.
@@ -706,22 +771,24 @@ export default function Home() {
         writeLocalTrips(uid, selected);
         setProfileReady(true);
         setCloudReady(true);
-        setSynced(selectedPayload === cloudPayload);
+        setSynced(selectedPayload === cloudPayload && !snap.metadata.hasPendingWrites);
         setOfflineCachedAt(selected.updatedAt > 0 ? new Date(selected.updatedAt).toISOString() : null);
       }, (error) => {
         if (activeUidRef.current !== uid) return;
+        clearProfileTimeout();
+        setProfileLoadSlow(false);
         console.error("Could not load Firestore trip data:", error);
         setSynced(false);
         setCloudReady(false);
         const latestLocal = readLocalTrips(uid);
         if (latestLocal) {
-          baselineRef.current = { uid, payload: tripCachePayload(latestLocal), updatedAt: latestLocal.updatedAt };
+          baselineRef.current = { uid, payload: tripDataPayload(latestLocal.savedTrips), updatedAt: latestLocal.updatedAt };
           setSavedTrips(latestLocal.savedTrips);
           setActiveTripId(latestLocal.activeTripId);
           setOfflineCachedAt(latestLocal.updatedAt > 0 ? new Date(latestLocal.updatedAt).toISOString() : null);
         } else {
           const empty = normalizeTripCache([], "");
-          baselineRef.current = { uid, payload: tripCachePayload(empty), updatedAt: 0 };
+          baselineRef.current = { uid, payload: tripDataPayload(empty.savedTrips), updatedAt: 0 };
           setSavedTrips([]);
           setActiveTripId("");
         }
@@ -730,23 +797,38 @@ export default function Home() {
       });
     });
     return () => {
+      clearTimeout(authTimeout);
+      clearProfileTimeout();
       if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
       unsubscribeCloud();
       unsubscribe();
     };
   }, []);
 
-  // Persist signed-in changes to an account-specific device cache immediately,
-  // then debounce the whole-profile Firestore write to avoid stale write races.
+  // Keep the active itinerary as a per-device preference. Selecting a trip on
+  // a phone should not change the open trip on a laptop or rewrite the entire
+  // account document.
+  useEffect(() => {
+    if (!user || !profileReady) return;
+    const current = readLocalTrips(user.uid);
+    const baseline = baselineRef.current;
+    const updatedAt = Math.max(
+      current?.updatedAt ?? 0,
+      baseline?.uid === user.uid ? baseline.updatedAt : 0,
+    );
+    writeLocalTrips(user.uid, normalizeTripCache(savedTrips, activeTripId, updatedAt));
+  }, [user, profileReady, savedTrips, activeTripId]);
+
+  // Debounce actual trip-data changes before writing the account document.
   useEffect(() => {
     if (!user || !profileReady) return;
 
-    const normalized = normalizeTripCache(savedTrips, activeTripId);
-    const payload = tripCachePayload(normalized);
+    const payload = tripDataPayload(savedTrips);
     const baseline = baselineRef.current;
     if (baseline?.uid === user.uid && baseline.payload === payload) return;
 
-    const cache = { ...normalized, updatedAt: Date.now() };
+    const localActiveId = readLocalTrips(user.uid)?.activeTripId ?? "";
+    const cache = normalizeTripCache(savedTrips, localActiveId, Date.now());
     baselineRef.current = { uid: user.uid, payload, updatedAt: cache.updatedAt };
     writeLocalTrips(user.uid, cache);
     const cachedAt = new Date(cache.updatedAt).toISOString();
@@ -783,7 +865,7 @@ export default function Home() {
           const docRef = doc(db, "users", user.uid, "user_trips", "all_trips");
           await setDoc(docRef, {
             savedTrips: cache.savedTrips,
-            activeTripId: cache.activeTripId,
+            activeTripId: deleteField(),
             updatedAt: cache.updatedAt,
           }, { merge: true });
           if (activeUidRef.current === user.uid && syncGenerationRef.current === generation) {
@@ -804,7 +886,7 @@ export default function Home() {
         syncTimerRef.current = null;
       }
     };
-  }, [user, profileReady, cloudReady, savedTrips, activeTripId]);
+  }, [user, profileReady, cloudReady, savedTrips]);
 
   const day = useMemo(() => itineraryDays[activeDay] || itineraryDays[0] || { date: "12", short: "SAT", label: "Day 1", events: [] }, [activeDay, itineraryDays]);
 
@@ -877,7 +959,7 @@ export default function Home() {
         if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
         setWeatherLoading(true);
         setWeatherError("");
-        return fetch(`/api/weather?${query.toString()}`, { cache: "no-store", signal: controller.signal });
+        return fetch(`/api/weather?${query.toString()}`, { signal: controller.signal });
       })
       .then(async (response) => {
         const body = await response.json() as WeatherForecast & { error?: string };
@@ -937,7 +1019,7 @@ export default function Home() {
         try {
           const location = [pin.name, tripCity, tripRegion, tripCountry].filter(Boolean).join(", ");
           const query = new URLSearchParams({ q: location, countryCode: inferredCountryCode });
-          const response = await fetch(`/api/geocode?${query.toString()}`, { cache: "no-store", signal: controller.signal });
+          const response = await fetch(`/api/geocode?${query.toString()}`, { signal: controller.signal });
           const body = await response.json() as { latitude?: number; longitude?: number };
           if (!response.ok || typeof body.latitude !== "number" || typeof body.longitude !== "number") continue;
           setSavedTrips((trips) => trips.map((trip) => trip.id === tripId ? {
@@ -1022,6 +1104,28 @@ export default function Home() {
     setAuthModalOpen(true);
     notify(`Sign in to ${action}`);
     return false;
+  }
+
+  async function shareActiveTrip() {
+    if (!activeTrip) return;
+    const title = `${activeTrip.name} - JourneySync`;
+    const text = buildTripSummary(activeTrip);
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share({ title, text });
+        notify("Trip summary shared.");
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      notify("Read-only trip summary copied.");
+    } catch (error) {
+      console.error("Trip summary could not be shared.", error);
+      notify("Trip summary could not be shared in this browser.");
+    }
   }
 
   function openMutationPanel(
@@ -1735,7 +1839,7 @@ export default function Home() {
   // Team & Map Handlers
   function addTravelerSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!requireSignIn("invite a traveler")) return;
+    if (!requireSignIn("add a traveler")) return;
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") || "New Traveler");
     const email = String(form.get("email") || "traveler@example.com");
@@ -1782,7 +1886,7 @@ export default function Home() {
     try {
       const location = [name, tripCity, tripRegion, tripCountry].filter(Boolean).join(", ");
       const query = new URLSearchParams({ q: location, countryCode: inferredCountryCode });
-      const response = await fetch(`/api/geocode?${query.toString()}`, { cache: "no-store" });
+      const response = await fetch(`/api/geocode?${query.toString()}`);
       const body = await response.json() as Partial<typeof coordinates> & { error?: string };
       if (!response.ok || typeof body.latitude !== "number" || typeof body.longitude !== "number") {
         throw new Error(body.error || "That place could not be located.");
@@ -1868,9 +1972,17 @@ export default function Home() {
     return (
       <main className="auth-gate auth-gate-loading" aria-live="polite">
         <div className="auth-gate-brand"><span className="brand-mark">J</span><strong>JourneySync</strong></div>
-        <div className="auth-loader" aria-hidden="true" />
-        <h1>Loading your trips</h1>
-        <p>JourneySync is checking your Firebase profile.</p>
+        {!profileLoadSlow && <div className="auth-loader" aria-hidden="true" />}
+        <h1>{profileLoadSlow ? "Still connecting to Firebase" : "Loading your trips"}</h1>
+        <p>{profileLoadSlow
+          ? "JourneySync is keeping this screen open so an empty device does not replace your cloud trips."
+          : "JourneySync is checking your Firebase profile."}</p>
+        {profileLoadSlow && (
+          <div className="auth-recovery-actions">
+            <button type="button" className="primary-action" onClick={() => window.location.reload()}>Retry Firebase Connection</button>
+            <button type="button" className="secondary-action" onClick={() => void handleLogOut()} disabled={authLoading}>Sign Out</button>
+          </div>
+        )}
       </main>
     );
   }
@@ -2072,12 +2184,12 @@ export default function Home() {
           <button className="mobile-menu" aria-label="Open menu" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>≡</button>
 
           <div className="trip-switcher">
-            <span className="flag" onClick={() => setAppView("trips")} style={{ cursor: "pointer" }}>✦</span>
-            <span onClick={() => setAppView("trips")} style={{ cursor: "pointer" }} title="Return to all trips">
+            <button type="button" className="flag" onClick={() => setAppView("trips")} aria-label="Return to all trips">✦</button>
+            <button type="button" className="trip-current-button" onClick={() => setAppView("trips")} title="Return to all trips">
               <small>CURRENT TRIP ▾ ({savedTrips.length})</small>
               <strong>{tripName}</strong>
-            </span>
-            <button aria-label="Create a new trip" onClick={() => openMutationPanel("trip")} title="Create new itinerary">＋</button>
+            </button>
+            <button type="button" aria-label="Create a new trip" onClick={() => openMutationPanel("trip")} title="Create new itinerary">＋</button>
           </div>
 
           <div className="top-actions">
@@ -2086,14 +2198,14 @@ export default function Home() {
               ●<i />
             </button>
             
-            <div className="avatar-stack" aria-label="Travelers" onClick={() => setPlannerOpen("travelers")} style={{ cursor: "pointer" }}>
+            <button type="button" className="avatar-stack traveler-button" aria-label="Manage travelers" onClick={() => setPlannerOpen("travelers")}>
               {travelersList.slice(0, 3).map((t) => (
                 <span key={t.email} className={`avatar ${t.bg}`}>{t.avatar}</span>
               ))}
               {travelersList.length > 3 && <span className="avatar more">+{travelersList.length - 3}</span>}
-            </div>
+            </button>
 
-            <button className="share-button" onClick={() => setPlannerOpen("travelers")}>↗ <span>Invite</span></button>
+            <button type="button" className="share-button" onClick={() => void shareActiveTrip()} title="Share a read-only trip summary">↗ <span>Share</span></button>
           </div>
 
           {/* Notifications Popover */}
@@ -2241,7 +2353,7 @@ export default function Home() {
                 </section>
 
                 <aside className="right-rail">
-                  <section className="weather-card" onClick={() => setPlannerOpen("weather")} style={{ cursor: "pointer" }}>
+                  <button type="button" className="weather-card" onClick={() => setPlannerOpen("weather")} aria-label="Open five-day weather forecast">
                     <div>
                       <small>{dynamicWeatherForecast.destination.toUpperCase()} · {dynamicWeatherForecast.days[0]?.day || "LIVE WEATHER"}</small>
                       <strong>{currentWeatherLoading ? "Loading…" : dynamicWeatherForecast.days[0]?.temp || "Unavailable"}</strong>
@@ -2249,7 +2361,7 @@ export default function Home() {
                     </div>
                     <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "🌐"}</i><b>☁</b></div>
                     <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Precip. {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
-                  </section>
+                  </button>
 
                   <section className="expense-card">
                     <div className="rail-heading"><span>EXPENSES SNAPSHOT</span><button onClick={() => openMutationPanel("expense")}>＋</button></div>
@@ -2518,7 +2630,7 @@ export default function Home() {
               </section>
 
               <aside className="right-rail">
-                <section className="weather-card" onClick={() => setPlannerOpen("weather")} style={{ cursor: "pointer" }}>
+                <button type="button" className="weather-card" onClick={() => setPlannerOpen("weather")} aria-label="Open five-day weather forecast">
                   <div>
                     <small>{dynamicWeatherForecast.destination.toUpperCase()} · {dynamicWeatherForecast.days[0]?.day || "LIVE WEATHER"}</small>
                     <strong>{currentWeatherLoading ? "Loading…" : dynamicWeatherForecast.days[0]?.temp || "Unavailable"}</strong>
@@ -2526,7 +2638,7 @@ export default function Home() {
                   </div>
                   <div className="sun-cloud"><i>{dynamicWeatherForecast.days[0]?.icon || "🌐"}</i><b>☁</b></div>
                   <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Precip. {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
-                </section>
+                </button>
 
                 <section className="expense-card">
                   <div className="rail-heading">
@@ -2990,7 +3102,7 @@ export default function Home() {
             </div>
 
             <form onSubmit={(e) => { addTravelerSubmit(e); }} style={{ background: "#f1f5f9", padding: "12px", borderRadius: "8px", marginBottom: "16px", display: "grid", gap: "8px" }}>
-              <strong style={{ fontSize: "11px" }}>＋ Invite New Traveler</strong>
+              <strong style={{ fontSize: "11px" }}>＋ Add Traveler</strong>
               <div className="form-row">
                 <input name="name" placeholder="Full Name" required style={{ fontSize: "11px", padding: "6px" }} />
                 <input name="email" type="email" placeholder="Email Address" required style={{ fontSize: "11px", padding: "6px" }} />
@@ -2998,11 +3110,9 @@ export default function Home() {
               <button className="primary-action" style={{ margin: 0, padding: "6px 12px", fontSize: "11px" }}>Add to Team</button>
             </form>
 
-            <button className="secondary-action" onClick={() => {
-              navigator.clipboard.writeText(window.location.href);
-              notify("Trip invite link copied to clipboard!");
-            }}>
-              Copy Invite Link
+            <p className="modal-copy">People listed here are saved with this trip. Sharing sends a read-only itinerary summary and does not grant access to your account.</p>
+            <button type="button" className="secondary-action" onClick={() => void shareActiveTrip()}>
+              Share Trip Summary
             </button>
           </section>
         </div>
@@ -3179,11 +3289,11 @@ export default function Home() {
             <div style={{ display: "grid", gap: "10px", marginBottom: "20px", maxHeight: "280px", overflowY: "auto" }}>
               {activeTrips.length === 0 && <p className="modal-copy">No active or upcoming trips. Open the trip dashboard to view Archived.</p>}
               {activeTrips.map((t) => (
-                <div key={t.id} onClick={() => { setActiveTripId(t.id); setActiveDay(0); setPlannerOpen(null); notify(`Switched to "${t.name}"`); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", background: activeTripId === t.id ? "#fff7ed" : "#f8fafc", border: activeTripId === t.id ? "1.5px solid var(--coral)" : "1px solid var(--line)", borderRadius: "8px", cursor: "pointer" }}>
-                  <div>
+                <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", background: activeTripId === t.id ? "#fff7ed" : "#f8fafc", border: activeTripId === t.id ? "1.5px solid var(--coral)" : "1px solid var(--line)", borderRadius: "8px" }}>
+                  <button type="button" onClick={() => { setActiveTripId(t.id); setActiveDay(0); setPlannerOpen(null); notify(`Switched to "${t.name}"`); }} style={{ flex: 1, border: 0, padding: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}>
                     <strong style={{ fontSize: "13px", display: "block", color: activeTripId === t.id ? "var(--coral)" : "#0f172a" }}>{t.name} {activeTripId === t.id && "(Active)"}</strong>
                     <small style={{ fontSize: "10px", color: "#64748b" }}>{t.route} · {t.days.length} Day{t.days.length === 1 ? "" : "s"} · {t.travelersCount} Traveler{t.travelersCount === 1 ? "" : "s"}</small>
-                  </div>
+                  </button>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                     {activeTrips.length > 0 && (
                       <button
