@@ -8,6 +8,7 @@
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import {
   getAuth,
+  connectAuthEmulator,
   GoogleAuthProvider,
   onAuthStateChanged as firebaseOnAuthStateChanged,
   signInWithEmailAndPassword as firebaseSignInWithEmailAndPassword,
@@ -20,6 +21,7 @@ import {
 import {
   getFirestore,
   initializeFirestore,
+  connectFirestoreEmulator,
   persistentLocalCache,
   persistentMultipleTabManager,
   doc as firestoreDoc,
@@ -112,12 +114,31 @@ if (typeof window !== "undefined") {
       // round trip. Falls back to the default memory-only cache in
       // environments where IndexedDB persistence isn't available (e.g.
       // private browsing, multiple open tabs without broadcast support).
+      //
+      // The database id is overridable only so the emulator, which serves the
+      // SDK's implicit "(default)", can be pointed at. Production leaves it
+      // unset and keeps the pin above.
+      const databaseId = process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID || "default";
       try {
         dbInstance = initializeFirestore(app, {
           localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
-        }, "default");
+        }, databaseId);
       } catch {
-        dbInstance = getFirestore(app, "default");
+        dbInstance = getFirestore(app, databaseId);
+      }
+
+      // Local development against the Firebase Emulator Suite. Strictly
+      // opt-in: with the variable unset this block never runs and the
+      // deployed app is untouched. It exists so the app's actual features
+      // can be exercised without provisioning a real Firebase project,
+      // which previously left a fresh clone stuck at the sign-in screen.
+      const emulatorHost = process.env.NEXT_PUBLIC_FIREBASE_EMULATOR_HOST;
+      if (emulatorHost) {
+        const [host, portText] = emulatorHost.split(":");
+        const firestorePort = Number(portText || 8080);
+        connectAuthEmulator(authInstance, `http://${host}:9099`, { disableWarnings: true });
+        connectFirestoreEmulator(dbInstance, host, firestorePort);
+        console.info(`JourneySync is using the Firebase emulators at ${host}.`);
       }
     } catch (error) {
       initializationError = error;

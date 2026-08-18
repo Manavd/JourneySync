@@ -12,6 +12,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -80,23 +81,27 @@ import java.text.SimpleDateFormat;
 /** A native Android JourneySync experience backed by Firebase Authentication and Firestore with full website feature parity. */
 public class MainActivity extends android.app.Activity {
     private static final int RC_GOOGLE_SIGN_IN = 4021;
-    /** Shared JourneySync palette used by the current website. */
-    private static final String BLUE = "#89B8D8";
-    private static final String BLUE_PRESSED = "#6F9FBE";
-    private static final String BLUE_SOFT = "#E7F2F8";
-    private static final String INK = "#1B2731";
-    private static final String SURFACE = "#FFFDF8";
+    // The shared JourneySync palette. These are aliases, not values: every colour
+    // is defined once in design/tokens.json and generated into DesignTokens, so
+    // the website and this app cannot drift apart the way they did when the
+    // launcher blue was a red that appeared nowhere on the site. The short names
+    // stay because the screens below read better for them.
+    private static final String BLUE = DesignTokens.BLUE;
+    private static final String BLUE_PRESSED = DesignTokens.BLUE_PRESSED;
+    private static final String BLUE_SOFT = DesignTokens.BLUE_SOFT;
+    private static final String INK = DesignTokens.INK;
+    private static final String SURFACE = DesignTokens.SURFACE;
     /** Coral is reserved for warnings and destructive actions. */
-    private static final String CORAL = "#EF7159";
-    private static final String NAVY = "#17212B";
-    private static final String CREAM = "#F4F1EA";
-    private static final String MINT = "#B9DDC7";
-    private static final String GREEN = "#1D7A48";
-    private static final String ORANGE = "#D97706";
-    private static final String PURPLE = "#7C3AED";
-    private static final String MUTED = "#72808A";
-    private static final String FAINT = "#7B8990";
-    private static final String LINE = "#DEDBD2";
+    private static final String CORAL = DesignTokens.CORAL;
+    private static final String NAVY = DesignTokens.NAVY;
+    private static final String CREAM = DesignTokens.CREAM;
+    private static final String MINT = DesignTokens.MINT;
+    private static final String GREEN = DesignTokens.GREEN;
+    private static final String ORANGE = DesignTokens.ORANGE;
+    private static final String PURPLE = DesignTokens.PURPLE;
+    private static final String MUTED = DesignTokens.MUTED;
+    private static final String FAINT = DesignTokens.FAINT;
+    private static final String LINE = DesignTokens.LINE;
 
     private static final int SECTION_OVERVIEW = 0;
     private static final int SECTION_ITINERARY = 1;
@@ -140,6 +145,12 @@ public class MainActivity extends android.app.Activity {
     private List<Trip.TrackedFlight> liveRefreshFlights = new ArrayList<>();
     private Runnable liveRefreshLoop;
     private ProgressBar authProgress;
+
+    private static final String STATE_ACTIVE_TRIP_ID = "journeysync.activeTripId";
+    private static final String STATE_ACTIVE_DAY_INDEX = "journeysync.activeDayIndex";
+    private static final String STATE_ACTIVE_SECTION = "journeysync.activeSection";
+    private static final String STATE_SHOWING_TRIP_LIBRARY = "journeysync.showingTripLibrary";
+    private static final String STATE_SHOW_ARCHIVED_TRIPS = "journeysync.showArchivedTrips";
 
     private final List<Trip> savedTrips = new ArrayList<>();
     private String activeTripId = "";
@@ -196,7 +207,35 @@ public class MainActivity extends android.app.Activity {
                 .requestEmail()
                 .build();
         googleClient = GoogleSignIn.getClient(this, googleOptions);
+        restoreNavigationState(savedInstanceState);
         showCurrentState();
+    }
+
+    /**
+     * Rotation, unfolding, and entering multi-window all destroy and recreate the
+     * activity. Navigation state lives in plain fields, so without this the
+     * traveler is thrown back to the trip library and the Overview tab of the
+     * first trip every time the screen turns - the most common thing a device
+     * with a changing aspect ratio does. Only the small navigation cursor is
+     * saved; trip content itself is reloaded from Firestore and the local cache.
+     */
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putString(STATE_ACTIVE_TRIP_ID, activeTripId);
+        outState.putInt(STATE_ACTIVE_DAY_INDEX, activeDayIndex);
+        outState.putInt(STATE_ACTIVE_SECTION, activeSection);
+        outState.putBoolean(STATE_SHOWING_TRIP_LIBRARY, showingTripLibrary);
+        outState.putBoolean(STATE_SHOW_ARCHIVED_TRIPS, showArchivedTrips);
+    }
+
+    private void restoreNavigationState(Bundle savedInstanceState) {
+        if (savedInstanceState == null) return;
+        activeTripId = savedInstanceState.getString(STATE_ACTIVE_TRIP_ID, activeTripId);
+        activeDayIndex = savedInstanceState.getInt(STATE_ACTIVE_DAY_INDEX, activeDayIndex);
+        activeSection = savedInstanceState.getInt(STATE_ACTIVE_SECTION, activeSection);
+        showingTripLibrary = savedInstanceState.getBoolean(STATE_SHOWING_TRIP_LIBRARY, showingTripLibrary);
+        showArchivedTrips = savedInstanceState.getBoolean(STATE_SHOW_ARCHIVED_TRIPS, showArchivedTrips);
     }
 
     @Override
@@ -1144,13 +1183,20 @@ public class MainActivity extends android.app.Activity {
         }
         for (int i = 0; i < labels.length; i++) {
             final int section = sections[i];
-            nav.addView(navItem(glyphs[i], labels[i], section == selected, () -> {
+            LinearLayout item = navItem(glyphs[i], labels[i], section == selected, () -> {
                 activeSection = section;
                 renderDashboard(user);
-            }), new LinearLayout.LayoutParams(0, dp(66), 1));
+            });
+            item.setMinimumHeight(dp(66));
+            nav.addView(item, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         }
+        // The bar keeps its 68dp look on default settings but measures to its
+        // content, because the glyph and caption inside are sized in sp. Pinned
+        // to an exact height the tabs were cropped mid-glyph once a traveler
+        // raised the system font size.
+        nav.setMinimumHeight(dp(68));
         appRoot.addView(nav, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(68)));
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
     private void renderOverview(FirebaseUser user, Trip trip) {
@@ -1721,7 +1767,7 @@ public class MainActivity extends android.app.Activity {
             map.loadDataWithBaseURL("file:///android_asset/leaflet/", tripMapHtml(located),
                     "text/html", "utf-8", null);
             LinearLayout.LayoutParams mapParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(240));
+                    LinearLayout.LayoutParams.MATCH_PARENT, tripMapHeightPx());
             mapParams.bottomMargin = dp(16);
             screen.addView(map, mapParams);
         }
@@ -3682,10 +3728,17 @@ public class MainActivity extends android.app.Activity {
 
         TextView icon = text(glyph, 17, selected ? BLUE_PRESSED : INK, true);
         icon.setGravity(Gravity.CENTER);
+        icon.setMaxLines(1);
         item.addView(icon, margins(0, 8, 0, 1));
         TextView caption = text(label, 9, selected ? BLUE_PRESSED : MUTED, true);
         caption.setGravity(Gravity.CENTER);
         caption.setLetterSpacing(.08f);
+        // Six tabs share the width, so a narrow screen leaves roughly 50dp each.
+        // Captions are sized in sp and grow with the system font scale, so
+        // without a single-line cap "Expenses" wrapped and was then clipped by
+        // the bar's fixed height. Ellipsizing keeps every tab on one readable row.
+        caption.setMaxLines(1);
+        caption.setEllipsize(TextUtils.TruncateAt.END);
         item.addView(caption);
         return item;
     }
@@ -3823,7 +3876,7 @@ public class MainActivity extends android.app.Activity {
     }
 
     /** Rounded corner radius shared by buttons and cards, matching the web UI. */
-    private static final int RADIUS_DP = 10;
+    private static final int RADIUS_DP = DesignTokens.RADIUS_DP;
 
     private GradientDrawable roundedFill(String fill, String stroke) {
         GradientDrawable shape = new GradientDrawable();
@@ -3895,6 +3948,21 @@ public class MainActivity extends android.app.Activity {
 
     private int dp(int value) {
         return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, getResources().getDisplayMetrics());
+    }
+
+    /**
+     * Sizes the trip map against the viewport instead of pinning it to one dp
+     * value. A flat 240dp is about a third of a portrait phone but nearly the
+     * whole usable height of a landscape one, where it pushed the places list
+     * and the section heading entirely below the fold. The ceiling keeps
+     * portrait phones looking exactly as before; the floor keeps the map usable
+     * on short viewports and on tall system font scales that inflate everything
+     * stacked above it.
+     */
+    private int tripMapHeightPx() {
+        int viewportHeight = getResources().getDisplayMetrics().heightPixels;
+        int proportional = Math.round(viewportHeight * 0.34f);
+        return Math.max(dp(150), Math.min(proportional, dp(240)));
     }
 
     /** Blocks repeat taps while a sign-in request is in flight. */
@@ -4100,15 +4168,27 @@ public class MainActivity extends android.app.Activity {
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             int top;
             int bottom;
+            int left;
+            int right;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                // Union with the cutout: in landscape a notch sits on a side edge,
+                // where systemBars() alone reports nothing and the header slides
+                // under the camera housing.
+                android.graphics.Insets bars = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
                 top = bars.top;
                 bottom = bars.bottom;
+                left = bars.left;
+                right = bars.right;
             } else {
                 top = insets.getSystemWindowInsetTop();
                 bottom = insets.getSystemWindowInsetBottom();
+                left = insets.getSystemWindowInsetLeft();
+                right = insets.getSystemWindowInsetRight();
             }
-            view.setPadding(view.getPaddingLeft(), top, view.getPaddingRight(), bottom);
+            // Absolute rather than preserving the current left/right padding, so
+            // repeated inset passes stay idempotent.
+            view.setPadding(left, top, right, bottom);
             return insets;
         });
         root.requestApplyInsets();

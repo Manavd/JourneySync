@@ -177,6 +177,22 @@ type TripCache = {
   updatedAt: number;
 };
 
+/** Nominatim's usage policy allows at most one request per second. */
+const MAP_GEOCODE_INTERVAL_MS = 1100;
+
+// Firestore rejects any document larger than 1 MiB. The entire profile is a
+// single document, so once a trip library crosses that line every subsequent
+// write fails identically: the catch below logs to the console and the badge
+// stays unsynced forever, with nothing telling the traveler why or which trip
+// to trim. Checking first turns that into one actionable message. The budget
+// leaves headroom for field names and Firestore's own encoding overhead, which
+// the serialized payload does not account for.
+const PROFILE_PAYLOAD_BUDGET_BYTES = 900_000;
+
+function payloadByteLength(payload: string): number {
+  return new TextEncoder().encode(payload).length;
+}
+
 const EMPTY_DAYS: Day[] = [];
 const EMPTY_EXPENSES: Expense[] = [];
 const EMPTY_WALLET_DOCS: WalletDoc[] = [];
@@ -660,6 +676,7 @@ export default function Home() {
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState("");
   const mapGeocodeAttemptsRef = useRef(new Set<string>());
+  const lastMapGeocodeAtRef = useRef(0);
 
   // Auth Listener & Firestore Sync
   useEffect(() => {
@@ -839,6 +856,18 @@ export default function Home() {
           setOfflineCachedAt(cachedAt);
           setSynced(false);
         }
+        const payloadBytes = payloadByteLength(payload);
+        if (payloadBytes > PROFILE_PAYLOAD_BUDGET_BYTES) {
+          if (activeUidRef.current === user.uid && syncGenerationRef.current === generation) {
+            setSynced(false);
+            notify(
+              `This trip library is too large to sync (${Math.round(payloadBytes / 1024)} KB of a 1 MB limit). ` +
+              "Changes stay on this device. Archive or delete a trip to resume syncing.",
+            );
+          }
+          return;
+        }
+
         try {
           const docRef = doc(db, "users", user.uid, "user_trips", "all_trips");
           await setDoc(docRef, {
@@ -970,27 +999,44 @@ export default function Home() {
 
   // Older saved pins predate coordinate storage. Resolve them one at a time
   // when the map is opened, then let the normal profile sync persist them.
+  //
+  // Storing a resolved pin changes `mapPins`, which is a dependency here, so a
+  // successful lookup always restarts this effect and aborts the loop mid-flight.
+  // Every run therefore has to be safe to cut short at any point:
+  //
+  //   - An attempt is recorded only once its request is actually being sent.
+  //     Marking on entry meant an abort during the pacing delay retired that pin
+  //     for the rest of the session without ever having looked it up, so pins
+  //     after the first were silently skipped and never got coordinates.
+  //   - Pacing reads a timestamp that outlives the restart. The loop index resets
+  //     to 0 on every rerun, so gating the delay on `index > 0` let each restart
+  //     fire immediately and defeated Nominatim's one-request-per-second policy.
   useEffect(() => {
     if (activeNav !== "Map" || !activeTrip?.id) return;
+    const tripId = activeTrip.id;
     const missingPins = mapPins.filter((pin) =>
       typeof pin.latitude !== "number" || typeof pin.longitude !== "number",
-    ).filter((pin) => !mapGeocodeAttemptsRef.current.has(`${activeTrip.id}:${pin.name}`));
+    ).filter((pin) => !mapGeocodeAttemptsRef.current.has(`${tripId}:${pin.name}`));
     if (missingPins.length === 0) return;
 
     const controller = new AbortController();
     void (async () => {
-      for (const [index, pin] of missingPins.entries()) {
-        const attemptKey = `${activeTrip.id}:${pin.name}`;
-        mapGeocodeAttemptsRef.current.add(attemptKey);
-        if (index > 0) await new Promise((resolve) => window.setTimeout(resolve, 1100));
+      for (const pin of missingPins) {
+        const sinceLastLookup = Date.now() - lastMapGeocodeAtRef.current;
+        if (sinceLastLookup < MAP_GEOCODE_INTERVAL_MS) {
+          await new Promise((resolve) => window.setTimeout(resolve, MAP_GEOCODE_INTERVAL_MS - sinceLastLookup));
+        }
         if (controller.signal.aborted) return;
+
+        mapGeocodeAttemptsRef.current.add(`${tripId}:${pin.name}`);
+        lastMapGeocodeAtRef.current = Date.now();
         try {
           const location = [pin.name, tripCity, tripRegion, tripCountry].filter(Boolean).join(", ");
           const query = new URLSearchParams({ q: location, countryCode: inferredCountryCode });
           const response = await fetch(`/api/geocode?${query.toString()}`, { signal: controller.signal });
           const body = await response.json() as { latitude?: number; longitude?: number };
           if (!response.ok || typeof body.latitude !== "number" || typeof body.longitude !== "number") continue;
-          setSavedTrips((trips) => trips.map((trip) => trip.id === activeTrip.id ? {
+          setSavedTrips((trips) => trips.map((trip) => trip.id === tripId ? {
             ...trip,
             mapPins: trip.mapPins.map((savedPin) => savedPin.name === pin.name ? {
               ...savedPin,
@@ -2258,7 +2304,7 @@ export default function Home() {
         <div className="content">
           <div className="hero-row">
             <div>
-              <div className="eyebrow"><span /> {itineraryDays.length} DAYS · {tripTravelers} TRAVELER{tripTravelers === 1 ? "" : "S"}</div>
+              <div className="eyebrow"><span /> {itineraryDays.length} DAY{itineraryDays.length === 1 ? "" : "S"} · {tripTravelers} TRAVELER{tripTravelers === 1 ? "" : "S"}</div>
               <h1>{tripName}</h1>
               <p>{tripRoute}</p>
               <div className="trip-management-actions">
@@ -2298,7 +2344,7 @@ export default function Home() {
               <button onClick={() => mainArrivalEvent.kind === "flight" ? openFlightDetails(mainArrivalEvent.event || null) : setActiveNav("Itinerary")}>View details <span>→</span></button>
             </div>
           ) : (
-            <div className="status-banner" style={{ background: "#f8fafc", border: "1px dashed #cbd5e1" }}>
+            <div className="status-banner empty">
               <div className="status-symbol">✦</div>
               <div>
                 <small>NO ARRIVAL PASS YET</small>
@@ -2315,22 +2361,22 @@ export default function Home() {
               <div className="overview-cards">
                 <div className="overview-card">
                   <small>ITINERARY DURATION</small>
-                  <strong>{itineraryDays.length} Days</strong>
-                  <p>{itineraryDays.reduce((acc, d) => acc + d.events.length, 0)} Total Activities Planned</p>
+                  <strong>{itineraryDays.length} Day{itineraryDays.length === 1 ? "" : "s"}</strong>
+                  <p>{itineraryDays.reduce((acc, d) => acc + d.events.length, 0)} Total Activit{itineraryDays.reduce((acc, d) => acc + d.events.length, 0) === 1 ? "y" : "ies"} Planned</p>
                 </div>
                 <div className="overview-card">
                   <small>TOTAL EXPENSES</small>
                   <strong>{tripCurrency} {totalExpenseAmount.toFixed(2)}</strong>
-                  <p>Split across {travelersList.length} Travelers</p>
+                  <p>Split across {travelersList.length} Traveler{travelersList.length === 1 ? "" : "s"}</p>
                 </div>
                 <div className="overview-card">
                   <small>TRAVEL DOCUMENTS</small>
-                  <strong>{walletDocs.length} Passes</strong>
+                  <strong>{walletDocs.length} Pass{walletDocs.length === 1 ? "" : "es"}</strong>
                   <p>Boarding passes & hotel confirmations</p>
                 </div>
                 <div className="overview-card">
                   <small>TRAVEL TEAM</small>
-                  <strong>{travelersList.length} Members</strong>
+                  <strong>{travelersList.length} Member{travelersList.length === 1 ? "" : "s"}</strong>
                   <p>Organized by {user.displayName || user.email?.split("@")[0] || "you"}.</p>
                 </div>
               </div>
@@ -2784,7 +2830,7 @@ export default function Home() {
                           {exp.currency} {exp.amount.toFixed(2)}
                           <small>Split {travelersList.length} ways</small>
                         </div>
-                        <button style={{ border: 0, background: "transparent", color: "#e53e3e", cursor: "pointer", fontSize: "14px" }} onClick={() => deleteExpense(exp.id)}>×</button>
+                        <button style={{ border: 0, background: "transparent", color: "var(--danger)", cursor: "pointer", fontSize: "14px" }} onClick={() => deleteExpense(exp.id)}>×</button>
                       </div>
                     </div>
                   ))}
@@ -2840,7 +2886,7 @@ export default function Home() {
                         navigator.clipboard.writeText(doc.code);
                         notify(`Copied ticket code: ${doc.code}`);
                       }}>Copy Code</button>
-                      <button style={{ color: "#e53e3e" }} onClick={() => deleteWalletDoc(doc.id)}>Delete</button>
+                      <button style={{ color: "var(--danger)" }} onClick={() => deleteWalletDoc(doc.id)}>Delete</button>
                     </div>
                   </div>
                 ))}
@@ -3122,7 +3168,7 @@ export default function Home() {
                     <small style={{ fontSize: "9px", color: "#64748b" }}>{t.email} · {t.role}</small>
                   </div>
                   {travelersList.length > 1 && (
-                    <button style={{ border: 0, background: "transparent", color: "#e53e3e", cursor: "pointer", fontSize: "13px" }} onClick={() => removeTraveler(t.email)} title="Remove traveler">×</button>
+                    <button style={{ border: 0, background: "transparent", color: "var(--danger)", cursor: "pointer", fontSize: "13px" }} onClick={() => removeTraveler(t.email)} title="Remove traveler">×</button>
                   )}
                 </div>
               ))}
@@ -3319,7 +3365,7 @@ export default function Home() {
                 <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", background: activeTripId === t.id ? "var(--accent-soft)" : "#f8fafc", border: activeTripId === t.id ? "1.5px solid var(--accent)" : "1px solid var(--line)", borderRadius: "8px" }}>
                   <button type="button" onClick={() => { setActiveTripId(t.id); setActiveDay(0); setPlannerOpen(null); notify(`Switched to "${t.name}"`); }} style={{ flex: 1, border: 0, padding: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}>
                     <strong style={{ fontSize: "13px", display: "block", color: activeTripId === t.id ? "var(--accent-pressed)" : "#0f172a" }}>{t.name} {activeTripId === t.id && "(Active)"}</strong>
-                    <small style={{ fontSize: "10px", color: "#64748b" }}>{t.route} · {t.days.length} Days · {t.travelersCount} Travelers</small>
+                    <small style={{ fontSize: "10px", color: "#64748b" }}>{t.route} · {t.days.length} Day{t.days.length === 1 ? "" : "s"} · {t.travelersCount} Traveler{t.travelersCount === 1 ? "" : "s"}</small>
                   </button>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                     {activeTrips.length > 0 && (

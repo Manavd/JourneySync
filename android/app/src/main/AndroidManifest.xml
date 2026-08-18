@@ -11,9 +11,18 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.JourneySync">
 
+        <!--
+            resizeableActivity keeps the app honest in split screen and on
+            foldables rather than letting the system letterbox it.
+            adjustResize shrinks the scrolling content when the keyboard opens,
+            so the field being typed into stays visible; the default pan
+            behaviour slid the whole screen and hid the labels above the caret.
+        -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

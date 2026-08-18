@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CircleMarker } from "leaflet";
 
 export type TripMapPoint = {
   name: string;
@@ -11,6 +12,14 @@ export type TripMapPoint = {
 };
 
 type Coordinates = { latitude: number; longitude: number };
+
+/** The only marker properties that change when a pin is selected. */
+function pinStyle(selected: boolean) {
+  return {
+    radius: selected ? 10 : 8,
+    fillColor: selected ? "#ef7159" : "#17212b",
+  };
+}
 
 type TripMapProps = {
   location: string;
@@ -30,15 +39,23 @@ export default function TripMap({
   onSelect,
 }: TripMapProps) {
   const mapElementRef = useRef<HTMLDivElement>(null);
-  const onSelectRef = useRef(onSelect);
   const [resolvedCenter, setResolvedCenter] = useState<Coordinates | null>(null);
   const [mapError, setMapError] = useState("");
   const pointKey = useMemo(() => JSON.stringify(points), [points]);
   const effectiveCenter = center ?? resolvedCenter;
 
+  // Selecting a pin only restyles two markers, so the map build effect below
+  // must not depend on `selectedName` or `onSelect`. Reading both through refs
+  // keeps marker click handlers current without tearing the map down: before
+  // this split, every pin click ran map.remove() and rebuilt the whole map,
+  // refetching tiles and discarding the traveler's pan and zoom.
+  const markersRef = useRef(new globalThis.Map<string, CircleMarker>());
+  const selectedNameRef = useRef(selectedName);
+  const onSelectRef = useRef(onSelect);
   useEffect(() => {
+    selectedNameRef.current = selectedName;
     onSelectRef.current = onSelect;
-  }, [onSelect]);
+  }, [selectedName, onSelect]);
 
   useEffect(() => {
     if (center || !location) return;
@@ -99,14 +116,13 @@ export default function TripMap({
       destination.bindTooltip(destinationLabel);
 
       const bounds = L.latLngBounds([[effectiveCenter.latitude, effectiveCenter.longitude]]);
+      markersRef.current.clear();
       points.forEach((point) => {
         if (typeof point.latitude !== "number" || typeof point.longitude !== "number") return;
-        const selected = point.name === selectedName;
         const marker = L.circleMarker([point.latitude, point.longitude], {
-          radius: selected ? 10 : 8,
+          ...pinStyle(point.name === selectedNameRef.current),
           color: "#ffffff",
           weight: 3,
-          fillColor: selected ? "#ef7159" : "#17212b",
           fillOpacity: 1,
         }).addTo(map);
         const content = document.createElement("div");
@@ -118,6 +134,7 @@ export default function TripMap({
         content.append(title, description);
         marker.bindPopup(content);
         marker.on("click", () => onSelectRef.current(point.name));
+        markersRef.current.set(point.name, marker);
         bounds.extend([point.latitude, point.longitude]);
       });
 
@@ -125,7 +142,10 @@ export default function TripMap({
         map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
       }
       window.setTimeout(() => map.invalidateSize(), 0);
-      cleanup = () => map.remove();
+      cleanup = () => {
+        markersRef.current.clear();
+        map.remove();
+      };
     }).catch(() => {
       if (!cancelled) setMapError("The interactive map could not load. Refresh and try again.");
     });
@@ -134,7 +154,18 @@ export default function TripMap({
       cancelled = true;
       cleanup();
     };
-  }, [effectiveCenter, location, pointKey, points, selectedName]);
+  }, [effectiveCenter, location, pointKey, points]);
+
+  // Restyle in place rather than rebuilding. Markers live only after the async
+  // Leaflet import resolves, so an empty map here just means the build effect
+  // has not finished yet; it applies the current selection itself on creation.
+  useEffect(() => {
+    markersRef.current.forEach((marker, name) => {
+      const style = pinStyle(name === selectedName);
+      marker.setStyle({ fillColor: style.fillColor });
+      marker.setRadius(style.radius);
+    });
+  }, [selectedName, pointKey]);
 
   if (!location) return <div className="trip-map-status" role="alert">Choose a city in trip details to show its map.</div>;
   if (mapError) return <div className="trip-map-status" role="alert">{mapError}</div>;
