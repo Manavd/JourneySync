@@ -1,7 +1,7 @@
 <resources>
-    <!-- Mirrors the web palette in app/globals.css so the app and site match.
-         The former journeysync_blue was #EC3013, a red that appeared nowhere on
-         the website. -->
+    <!-- Exact interactive palette from app/globals.css. -->
+    <color name="journeysync_blue">#89B8D8</color>
+    <color name="journeysync_blue_pressed">#6F9FBE</color>
     <color name="journeysync_coral">#EF7159</color>
     <color name="journeysync_navy">#17212B</color>
     <color name="journeysync_ink">#1B2731</color>

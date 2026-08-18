@@ -23,15 +23,27 @@ import {
   persistentLocalCache,
   persistentMultipleTabManager,
   doc as firestoreDoc,
+  collection as firestoreCollection,
+  addDoc as firestoreAddDoc,
+  deleteDoc as firestoreDeleteDoc,
   setDoc as firestoreSetDoc,
   getDoc as firestoreGetDoc,
   onSnapshot as firestoreOnSnapshot,
+  query as firestoreQuery,
+  where as firestoreWhere,
+  orderBy as firestoreOrderBy,
+  limitToLast as firestoreLimitToLast,
+  serverTimestamp as firestoreServerTimestamp,
   deleteField as firestoreDeleteField,
   type Firestore,
+  type CollectionReference,
   type DocumentReference,
   type DocumentSnapshot,
   type DocumentData,
   type FieldValue,
+  type Query,
+  type QueryConstraint,
+  type QuerySnapshot,
   type SetOptions,
 } from "firebase/firestore";
 
@@ -185,6 +197,43 @@ export function doc(_db: Firestore, ...pathSegments: string[]): DocumentReferenc
   return firestoreDoc(requireDb(), pathSegments.join("/"));
 }
 
+export function collection(_db: Firestore, ...pathSegments: string[]): CollectionReference<DocumentData> {
+  return firestoreCollection(requireDb(), pathSegments.join("/"));
+}
+
+export function query(
+  collectionRef: CollectionReference<DocumentData>,
+  ...constraints: QueryConstraint[]
+): Query<DocumentData> {
+  return firestoreQuery(collectionRef, ...constraints);
+}
+
+export function where(fieldPath: string, opStr: "array-contains", value: unknown): QueryConstraint {
+  return firestoreWhere(fieldPath, opStr, value);
+}
+
+export function orderBy(fieldPath: string, direction: "asc" | "desc" = "asc"): QueryConstraint {
+  return firestoreOrderBy(fieldPath, direction);
+}
+
+export function limitToLast(limit: number): QueryConstraint {
+  return firestoreLimitToLast(limit);
+}
+
+export function serverTimestamp(): FieldValue {
+  return firestoreServerTimestamp();
+}
+
+export async function addDoc(
+  collectionRef: CollectionReference<DocumentData>,
+  data: Record<string, unknown>,
+): Promise<DocumentReference<DocumentData>> {
+  return firestoreAddDoc(collectionRef, data);
+}
+export async function deleteDoc(docRef: DocumentReference<DocumentData>): Promise<void> {
+  await firestoreDeleteDoc(docRef);
+}
+
 export async function setDoc(docRef: DocumentReference<DocumentData>, data: Record<string, unknown>, options?: SetOptions) {
   await firestoreSetDoc(docRef, data, options ?? {});
 }
@@ -203,4 +252,11 @@ export function onSnapshot(
   onError?: (error: Error) => void,
 ) {
   return firestoreOnSnapshot(docRef, onNext, onError);
+}
+export function onQuerySnapshot(
+  queryRef: Query<DocumentData>,
+  onNext: (snapshot: QuerySnapshot<DocumentData>) => void,
+  onError?: (error: Error) => void,
+) {
+  return firestoreOnSnapshot(queryRef, onNext, onError);
 }

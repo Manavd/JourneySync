@@ -7,6 +7,6 @@
         <item name="android:statusBarColor">@color/journeysync_surface</item>
         <item name="android:navigationBarColor">@color/journeysync_navy</item>
         <item name="android:windowBackground">@color/journeysync_surface</item>
-        <item name="android:colorAccent">@color/journeysync_coral</item>
+        <item name="android:colorAccent">@color/journeysync_blue</item>
     </style>
 </resources>
