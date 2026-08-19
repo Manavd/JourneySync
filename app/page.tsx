@@ -583,6 +583,12 @@ export default function Home() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [offlineCachedAt, setOfflineCachedAt] = useState<string | null>(null);
   const [profileReady, setProfileReady] = useState(false);
+  // Guest preview. Deliberately in-memory only: nothing is written to
+  // localStorage or Firestore, so a reload starts over. Both persistence
+  // effects below already require `user`, which is what makes that true by
+  // construction rather than by remembering to guard each write.
+  const [guestMode, setGuestMode] = useState(false);
+  const guestModeRef = useRef(false);
 
   const activeUidRef = useRef<string | null>(null);
   const baselineRef = useRef<{ uid: string; payload: string; updatedAt: number } | null>(null);
@@ -722,6 +728,19 @@ export default function Home() {
       setUser(currentUser);
       setAuthChecking(false);
       setAuthError("");
+
+      if (currentUser) {
+        guestModeRef.current = false;
+        setGuestMode(false);
+      }
+
+      // onAuthStateChanged can fire again with null while a guest is browsing.
+      // Leave the preview alone rather than emptying it underneath them.
+      if (!currentUser && guestModeRef.current) {
+        setAuthChecking(false);
+        setProfileReady(true);
+        return;
+      }
 
       if (!currentUser) {
         setSavedTrips([]);
@@ -1108,6 +1127,9 @@ export default function Home() {
   // Trip data can only be created, edited, or deleted while signed in, so it
   // always has an account to sync to. Guests get a read-only view.
   function requireSignIn(action: string): boolean {
+    // A guest is editing a throwaway in-memory library, so there is nothing to
+    // sign in for. Features that genuinely need an account use requireAccount.
+    if (guestMode) return true;
     if (user && profileReady) return true;
     if (user) {
       notify("Your Firebase profile is still loading. Try again in a moment.");
@@ -1199,13 +1221,53 @@ export default function Home() {
     }
   }
 
+  function enterGuestMode() {
+    guestModeRef.current = true;
+    setGuestMode(true);
+    setAuthModalOpen(false);
+    setAuthError("");
+    setAuthChecking(false);
+    setProfileReady(true);
+    setCloudReady(false);
+    setSynced(true);
+    setOfflineCachedAt(null);
+    setSavedTrips([]);
+    setActiveTripId("");
+    setActiveDay(0);
+    setAppView("trips");
+  }
+
+  function exitGuestMode() {
+    guestModeRef.current = false;
+    setGuestMode(false);
+    setProfileReady(false);
+    setSavedTrips([]);
+    setActiveTripId("");
+    setActiveDay(0);
+    setAppView("trips");
+    setSelectedChatId("");
+  }
+
+  /**
+   * For the handful of features that need a real account rather than just
+   * somewhere to put data: group chat reads and writes Firestore under a uid,
+   * so a guest has nothing to attach to.
+   */
+  function requireAccount(action: string): boolean {
+    if (user && profileReady) return true;
+    setPlannerOpen(null);
+    setAuthError("");
+    setAuthModalOpen(true);
+    notify(`Sign in to ${action}`);
+    return false;
+  }
+
   // Trip & Itinerary Handlers - Multi-Trip
   function createTrip(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!user || !profileReady) {
-      requireSignIn("create a trip");
-      return;
-    }
+    // Goes through requireSignIn so the guest preview can create its own
+    // throwaway trips; the direct !user test here used to bypass that.
+    if (!requireSignIn("create a trip")) return;
     const form = new FormData(event.currentTarget);
     const location = locationFromForm(form);
     const name = String(form.get("name") || `${location.city} trip` || "My Trip").trim();
@@ -1236,10 +1298,10 @@ export default function Home() {
     }];
 
     const defaultOrganizer: Traveler = {
-      name: user.displayName || user.email?.split("@")[0] || "Organizer",
+      name: user ? (user.displayName || user.email?.split("@")[0] || "Organizer") : "Guest",
       role: "Trip organizer",
-      email: user.email || "",
-      avatar: (user.displayName || user.email || "OR").slice(0, 2).toUpperCase(),
+      email: user?.email || "",
+      avatar: user ? (user.displayName || user.email || "OR").slice(0, 2).toUpperCase() : "G",
       bg: "avatar-me",
     };
     const newTravelers: Traveler[] = [defaultOrganizer];
@@ -1941,7 +2003,7 @@ export default function Home() {
     );
   }
 
-  if (!user) {
+  if (!user && !guestMode) {
     return (
       <main className="auth-gate">
         <section className="auth-gate-intro" aria-label="JourneySync introduction">
@@ -1985,6 +2047,12 @@ export default function Home() {
               {authLoading ? "Please wait…" : "Continue with Google"}
             </button>
             <p className="auth-help">Use Chrome or Edge for Google sign-in. Your session stays signed in when you return.</p>
+
+            <div className="auth-divider">OR</div>
+            <button type="button" className="secondary-action" onClick={enterGuestMode} disabled={authLoading}>
+              Continue as Guest
+            </button>
+            <p className="auth-help">Try JourneySync without an account. Nothing is saved: guest trips live in this tab only and disappear when you reload or sign in.</p>
           </div>
         </section>
       </main>
@@ -2010,10 +2078,13 @@ export default function Home() {
     );
   }
 
-  if (appView === "chat") {
+  // Guests never reach chat: the launcher requires an account. The `user` check
+  // makes that a fall-through to the trip views rather than a null dereference
+  // if the view state ever gets there another way.
+  if (appView === "chat" && user) {
     return (
       <main className="trip-library-shell chat-page-shell">
-        <TripChatSync user={user} trips={savedTrips} />
+        {user && <TripChatSync user={user} trips={savedTrips} />}
         <header className="trip-library-header">
           <div className="auth-gate-brand"><span className="brand-mark">J</span><strong>JourneySync</strong></div>
           <div className="trip-library-account">
@@ -2033,13 +2104,23 @@ export default function Home() {
   if (appView === "trips") {
     return (
       <main className="trip-library-shell">
-        <TripChatSync user={user} trips={savedTrips} />
+        {guestMode && (
+          <div className="guest-banner" role="status">
+            <span className="guest-banner-tag">GUEST PREVIEW</span>
+            <p>Nothing is saved. These trips live in this tab only and disappear when you reload.</p>
+            <button type="button" onClick={() => { setAuthMode("signup"); setAuthError(""); setAuthModalOpen(true); }}>Sign in to keep them</button>
+            <button type="button" className="guest-banner-exit" onClick={exitGuestMode}>Exit preview</button>
+          </div>
+        )}
+        {user && <TripChatSync user={user} trips={savedTrips} />}
         <header className="trip-library-header">
           <div className="auth-gate-brand"><span className="brand-mark">J</span><strong>JourneySync</strong></div>
           <div className="trip-library-account">
-            <span className="avatar avatar-me">{(user.displayName || user.email || "JS").slice(0, 2).toUpperCase()}</span>
-            <span><strong>{user.displayName || user.email?.split("@")[0] || "Traveler"}</strong><small>{cloudReady && synced ? "Firebase synced" : cloudReady ? "Saving changes" : "Saved on this device"}</small></span>
-            <button type="button" onClick={handleLogOut} disabled={authLoading}>{authLoading ? "Signing out…" : "Sign out"}</button>
+            <span className="avatar avatar-me">{user ? (user.displayName || user.email || "JS").slice(0, 2).toUpperCase() : "G"}</span>
+            <span><strong>{user ? (user.displayName || user.email?.split("@")[0] || "Traveler") : "Guest"}</strong><small>{!user ? "Nothing is saved" : cloudReady && synced ? "Firebase synced" : cloudReady ? "Saving changes" : "Saved on this device"}</small></span>
+            {user
+              ? <button type="button" onClick={handleLogOut} disabled={authLoading}>{authLoading ? "Signing out…" : "Sign out"}</button>
+              : <button type="button" onClick={exitGuestMode}>Exit preview</button>}
           </div>
         </header>
 
@@ -2106,14 +2187,15 @@ export default function Home() {
             </div>
           )}
 
-          <GroupChatLauncher
+          {user && <GroupChatLauncher
             user={user}
             trips={savedTrips}
             onOpen={(chatId) => {
+              if (!requireAccount("use group chat")) return;
               setSelectedChatId(chatId);
               setAppView("chat");
             }}
-          />
+          />}
         </section>
 
         {plannerOpen === "trip" && (
@@ -2147,7 +2229,7 @@ export default function Home() {
 
   return (
     <main className="app-shell">
-      <TripChatSync user={user} trips={savedTrips} />
+      {user && <TripChatSync user={user} trips={savedTrips} />}
       {/* Mobile Overlay Drawer backdrop */}
       {mobileMenuOpen && (
         <div className="sidebar-overlay" onClick={() => setMobileMenuOpen(false)} />
@@ -2227,7 +2309,7 @@ export default function Home() {
             </span>
             <span>
               <strong>{user ? (user.displayName || user.email?.split("@")[0]) : "Guest"}</strong>
-              <small>{authChecking ? "Checking account…" : user ? (!profileReady ? "Signed in · Loading your trips" : !cloudReady ? "Signed in · Saved on device" : synced ? "Signed in · Cloud synced" : "Signed in · Saving changes") : "Sign in to view your trips"}</small>
+              <small>{authChecking ? "Checking account…" : user ? (!profileReady ? "Signed in · Loading your trips" : !cloudReady ? "Signed in · Saved on device" : synced ? "Signed in · Cloud synced" : "Signed in · Saving changes") : guestMode ? "Guest preview · nothing is saved" : "Sign in to view your trips"}</small>
             </span>
             <span>•••</span>
           </button>
@@ -2236,6 +2318,14 @@ export default function Home() {
 
       {/* Workspace */}
       <section className="workspace">
+        {guestMode && (
+          <div className="guest-banner" role="status">
+            <span className="guest-banner-tag">GUEST PREVIEW</span>
+            <p>Nothing is saved. These trips live in this tab only and disappear when you reload.</p>
+            <button type="button" onClick={() => { setAuthMode("signup"); setAuthError(""); setAuthModalOpen(true); }}>Sign in to keep them</button>
+            <button type="button" className="guest-banner-exit" onClick={exitGuestMode}>Exit preview</button>
+          </div>
+        )}
         <header className="topbar">
           <button className="mobile-menu" aria-label="Open menu" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>≡</button>
 
@@ -2377,7 +2467,7 @@ export default function Home() {
                 <div className="overview-card">
                   <small>TRAVEL TEAM</small>
                   <strong>{travelersList.length} Member{travelersList.length === 1 ? "" : "s"}</strong>
-                  <p>Organized by {user.displayName || user.email?.split("@")[0] || "you"}.</p>
+                  <p>Organized by {user ? (user.displayName || user.email?.split("@")[0] || "you") : "you"}.</p>
                 </div>
               </div>
 
@@ -2419,7 +2509,7 @@ export default function Home() {
                     <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Precip. {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
                   </button>
 
-                  <WorldClock
+                  {user && <WorldClock
                     user={user}
                     destination={{
                       city: tripCity,
@@ -2428,7 +2518,7 @@ export default function Home() {
                       countryCode: inferredCountryCode,
                       timeZone: activeTrip?.timeZone || (weatherIsCurrent ? weatherForecast?.timeZone : ""),
                     }}
-                  />
+                  />}
 
                   <section className="expense-card">
                     <div className="rail-heading"><span>EXPENSES SNAPSHOT</span><button onClick={() => openMutationPanel("expense")}>＋</button></div>
@@ -2628,7 +2718,9 @@ export default function Home() {
 
           {activeNav === "Group Chat" && (
             <div className="view-fade">
-              <GroupChat user={user} trips={savedTrips} initialChatId={activeTrip?.id || selectedChatId} />
+              {user
+                ? <GroupChat user={user} trips={savedTrips} initialChatId={activeTrip?.id || selectedChatId} />
+                : <p className="trip-map-status" role="status">Group chat needs an account, so it is off in the guest preview. Sign in to message the people you are travelling with.</p>}
             </div>
           )}
 
@@ -2929,6 +3021,12 @@ export default function Home() {
               </div>
             ) : (
               <form onSubmit={handleAuthSubmit}>
+                {guestMode && (
+                  <div className="auth-sync-status is-paused">
+                    <strong>You are in the guest preview</strong>
+                    <small>Nothing you add is saved. Signing in starts an empty account, so copy anything you want to keep before you do.</small>
+                  </div>
+                )}
                 <div className="auth-tabs">
                   <button type="button" className={`auth-tab ${authMode === "login" ? "active" : ""}`} onClick={() => { setAuthMode("login"); setAuthError(""); }} disabled={authLoading}>Sign In</button>
                   <button type="button" className={`auth-tab ${authMode === "signup" ? "active" : ""}`} onClick={() => { setAuthMode("signup"); setAuthError(""); }} disabled={authLoading}>Register</button>
