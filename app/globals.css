@@ -699,3 +699,18 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
   .modal,
   .flight-edit-modal { max-height: calc(100dvh - 40px); }
 }
+
+/* Guest preview. Deliberately loud: a guest's work is discarded on reload, so
+   the warning has to stay on screen rather than being a toast they can miss. */
+.guest-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border: 1px dashed var(--accent-pressed); border-radius: 8px; background: var(--accent-soft); color: var(--ink); padding: 11px 14px; margin: 0 0 18px; }
+.guest-banner-tag { border-radius: 999px; background: var(--accent-pressed); color: #fff; padding: 4px 9px; font-size: 8px; font-weight: 800; letter-spacing: .1em; }
+.guest-banner p { flex: 1; min-width: 200px; margin: 0; font-size: 10px; line-height: 1.5; }
+.guest-banner button { border: 1px solid var(--accent-pressed); border-radius: 6px; background: var(--accent-pressed); color: #fff; padding: 8px 12px; font-size: 9px; font-weight: 800; cursor: pointer; }
+.guest-banner button:hover { background: var(--ink); border-color: var(--ink); }
+.guest-banner .guest-banner-exit { background: transparent; color: var(--ink); }
+.guest-banner .guest-banner-exit:hover { background: rgba(0,0,0,.06); border-color: var(--ink); color: var(--ink); }
+.trip-library-shell > .guest-banner { width: min(1180px, calc(100% - 40px)); margin: 18px auto 0; }
+@media (max-width: 620px) {
+  .guest-banner { align-items: stretch; flex-direction: column; }
+  .guest-banner button { width: 100%; }
+}
