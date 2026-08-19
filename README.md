@@ -214,8 +214,34 @@ entry point: it handles `/_vinext/image` through the Cloudflare Images binding
 and passes everything else to the vinext app router. Static assets are served
 from `dist/client` via the `ASSETS` binding.
 
-Server-only keys must be set as Worker secrets, not committed. Firestore rules
-deploy separately through `firebase.json`.
+Server-only keys must be set as Worker secrets, not committed:
+
+```bash
+npm run build
+npx wrangler deploy
+npx wrangler secret put AERODATABOX_API_KEY   # repeat per server-only key
+```
+
+Build first. `wrangler.jsonc` serves static assets from `dist/client`, so a
+deploy without a fresh build ships whatever is already on disk. Leave
+`NEXT_PUBLIC_FIREBASE_EMULATOR_HOST` and `NEXT_PUBLIC_FIREBASE_DATABASE_ID`
+unset in production, or the deployed app tries to reach emulators on localhost.
+
+### Firestore rules deploy separately
+
+Shipping the Worker does not ship `firestore.rules`. They are two deploys, and
+forgetting the second is silent until a feature that needs the new rules is
+denied at runtime: group chat reports "could not connect to Firestore" when the
+`trip_chats` rules are missing, because its listener is rejected.
+
+```bash
+npx firebase deploy --only firestore:rules
+```
+
+`.firebaserc` pins the project so the CLI does not ask for `--project`. The
+database is named `default` rather than the SDK's implicit `(default)`, which is
+why `firebase.json` uses the array form that names it: without that, rules land
+on a database the app never reads.
 
 ## Tests
 
