@@ -773,3 +773,7 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
   a[href]:after { content: "" !important; }
 }
 
+
+/* The live badge sat green even while the chat error banner was showing. */
+.chat-live-status.is-down { background: #fdecea; color: #8c3322; }
+.chat-live-status.is-down i { background: var(--danger); box-shadow: 0 0 0 3px rgba(229,62,62,.14); }

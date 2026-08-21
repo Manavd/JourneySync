@@ -58,6 +58,33 @@ function timestampMillis(value: unknown): number {
   return 0;
 }
 
+/**
+ * Firestore reports a code explaining why a listener was rejected. The previous
+ * copy ignored it and told everyone to deploy security rules, which is both
+ * meaningless to a traveller and wrong for most of these cases: an expired
+ * sign-in or a dropped connection has nothing to do with rules. The exact error
+ * still goes to the console for whoever can act on it.
+ */
+function chatErrorMessage(subject: string, error: unknown): string {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : "";
+  switch (code) {
+    case "permission-denied":
+      return `${subject} could not be opened: the Firestore rules for trip chats have not been published for this project yet.`;
+    case "failed-precondition":
+      return `${subject} needs a Firestore index that does not exist yet. The browser console has a link that creates it.`;
+    case "unauthenticated":
+      return `Your sign-in has expired. Sign out and back in to reopen ${subject.toLowerCase()}.`;
+    case "unavailable":
+    case "deadline-exceeded":
+      return `${subject} cannot reach Firestore right now, and will reconnect on its own once the connection is back.`;
+    default:
+      return `${subject} is unavailable right now${code ? ` (${code})` : ""}. The browser console has the details.`;
+  }
+}
+
 function memberEmails(user: User, trip: ChatTrip): string[] {
   const values = [
     normalizeEmail(user.email),
@@ -130,7 +157,7 @@ function useChatGroups(user: User) {
       setState({
         email,
         groups: [],
-        error: "Group chat could not connect to Firestore. Make sure the latest security rules are deployed.",
+        error: chatErrorMessage("Group chat", listenError),
       });
     });
   }, [email]);
@@ -286,7 +313,7 @@ export default function GroupChat({
       setMessageState({
         chatId: selectedId,
         messages: [],
-        error: "Messages could not load. Check the Firestore rules and your traveler email.",
+        error: chatErrorMessage("This conversation", listenError),
       });
     });
   }, [selectedId]);
@@ -366,7 +393,9 @@ export default function GroupChat({
                 <h2>{selected.tripName}</h2>
                 <p>{selected.tripRoute || "Trip group"} · {selected.memberEmails.length} member{selected.memberEmails.length === 1 ? "" : "s"}</p>
               </div>
-              <span className="chat-live-status"><i /> Live</span>
+              <span className={`chat-live-status${messagesError ? " is-down" : ""}`}>
+                <i /> {messagesError ? "Not connected" : "Live"}
+              </span>
             </header>
 
             <div className="chat-messages">
