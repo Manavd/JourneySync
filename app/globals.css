@@ -714,3 +714,62 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 4.2v
   .guest-banner { align-items: stretch; flex-direction: column; }
   .guest-banner button { width: 100%; }
 }
+
+/* Smart Packing & Readiness Assistant */
+.packing-container { display: flex; flex-direction: column; gap: 20px; }
+.packing-header-card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 18px 20px; }
+.packing-progress-bar-bg { background: var(--cream); height: 8px; border-radius: 999px; overflow: hidden; margin: 10px 0 6px; }
+.packing-progress-bar-fill { background: var(--success); height: 100%; border-radius: 999px; transition: width 0.3s ease; }
+.packing-progress-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); font-weight: 600; }
+.packing-weather-tip { display: flex; align-items: center; gap: 10px; background: var(--accent-soft); border-left: 3px solid var(--accent-pressed); padding: 10px 14px; border-radius: 4px; margin-top: 14px; font-size: 11px; color: var(--ink); }
+.packing-categories-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.packing-category-card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 16px; }
+.packing-category-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 12px; font-weight: 700; color: var(--ink); border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.packing-item-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; font-size: 12px; border-bottom: 1px dashed rgba(0,0,0,0.05); }
+.packing-item-row.packed label { text-decoration: line-through; color: var(--muted); }
+.packing-item-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; flex: 1; margin: 0; }
+.packing-item-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--navy); cursor: pointer; }
+.packing-item-delete { background: transparent; border: none; color: var(--danger); cursor: pointer; font-size: 14px; opacity: 0.5; padding: 2px 6px; }
+.packing-item-delete:hover { opacity: 1; }
+.packing-add-form { display: flex; gap: 8px; margin-top: 10px; }
+.packing-add-form input { flex: 1; font-size: 11px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; }
+.packing-add-form button { background: var(--navy); color: #fff; border: none; border-radius: 4px; padding: 6px 12px; font-size: 10px; font-weight: 700; cursor: pointer; }
+
+/* Emergency & Assistance Hub */
+.emergency-hub-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 768px) { .emergency-hub-grid { grid-template-columns: 1fr; } }
+.emergency-card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 18px; }
+.emergency-numbers-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0; }
+.emergency-number-box { background: var(--cream); border: 1px solid var(--line); border-radius: 6px; padding: 10px; text-align: center; }
+.emergency-number-box strong { display: block; font-size: 18px; color: var(--danger); font-family: monospace; }
+.emergency-number-box span { font-size: 10px; color: var(--muted); text-transform: uppercase; font-weight: 700; }
+.emergency-phrase-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.emergency-phrase-item strong { font-size: 12px; color: var(--ink); }
+.emergency-phrase-item em { font-size: 11px; color: var(--navy); font-style: normal; font-weight: 600; }
+.emergency-phrase-item small { font-size: 10px; color: var(--muted); }
+
+/* Quick Currency Converter in Expenses */
+.currency-converter-card { background: var(--cream); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 14px 16px; margin-bottom: 18px; }
+.currency-converter-card h4 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--navy); }
+.currency-converter-inputs { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.currency-converter-inputs input { width: 100px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; font-size: 13px; font-weight: 700; }
+.currency-converter-inputs select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; background: #fff; }
+.currency-converter-arrow { font-size: 14px; font-weight: 800; color: var(--muted); }
+.currency-converter-result { font-size: 14px; font-weight: 800; color: var(--navy); background: #fff; padding: 6px 12px; border-radius: 4px; border: 1px solid var(--line); }
+
+/* Golden Hour & Daylight Tracker */
+.sun-tracker-card { background: linear-gradient(135deg, #FFFDF8 0%, #FFF5EB 100%); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 14px 16px; margin-top: 14px; }
+.sun-times-row { display: flex; justify-content: space-around; text-align: center; margin-top: 8px; }
+.sun-time-item strong { display: block; font-size: 13px; color: var(--ink); }
+.sun-time-item span { font-size: 10px; color: var(--muted); }
+
+/* Printable Travel Booklet & Print Styles */
+.booklet-actions { display: flex; gap: 10px; margin-bottom: 16px; }
+@media print {
+  body { background: #fff !important; color: #000 !important; }
+  .sidebar, .right-rail, .nav-tabs, .btn, button, .guest-banner, .modal-backdrop, .chat-launcher, .world-clock-heading button { display: none !important; }
+  .app-shell, .main-content, .trip-details-view { display: block !important; padding: 0 !important; margin: 0 !important; width: 100% !important; }
+  .card, .section-heading, .timeline-item, .expense-item-row, .packing-category-card { break-inside: avoid; border: 1px solid #ddd !important; }
+  a[href]:after { content: "" !important; }
+}
+

@@ -26,6 +26,8 @@ import {
   inferCountryCode,
   regionByCode,
 } from "./location-data";
+import { getEmergencyInfo } from "./emergency-data";
+import { convertCurrency, formatCurrencyAmount } from "./currency-rates";
 import TripMap from "./TripMap";
 import GroupChat, { GroupChatLauncher, TripChatSync } from "./GroupChat";
 import WorldClock from "./WorldClock";
@@ -126,6 +128,15 @@ type WalletDoc = {
   coralIcon?: boolean;
 };
 
+type PackingCategory = "Essentials" | "Clothing" | "Tech" | "Toiletries" | "Documents";
+
+type PackingItem = {
+  id: string;
+  category: PackingCategory;
+  text: string;
+  packed: boolean;
+};
+
 type Trip = {
   id: string;
   name: string;
@@ -139,6 +150,7 @@ type Trip = {
   mapPins: MapPin[];
   travelersList: Traveler[];
   guestFlights?: GuestFlight[];
+  packingList?: PackingItem[];
   countryCode?: string;
   country?: string;
   regionCode?: string;
@@ -148,6 +160,58 @@ type Trip = {
   archivedAt?: string;
   timeZone?: string;
 };
+
+function defaultPackingItems(): PackingItem[] {
+  return [
+    { id: "pack-1", category: "Essentials", text: "Passport / ID & Travel Visa", packed: false },
+    { id: "pack-2", category: "Essentials", text: "Credit / Debit Cards & Local Currency", packed: false },
+    { id: "pack-3", category: "Essentials", text: "Travel Insurance Card & Emergency Contacts", packed: false },
+    { id: "pack-4", category: "Clothing", text: "Comfortable walking shoes & sneakers", packed: false },
+    { id: "pack-5", category: "Clothing", text: "Weather-appropriate jacket & daily layers", packed: false },
+    { id: "pack-6", category: "Tech", text: "Smartphone & international roaming / eSIM", packed: false },
+    { id: "pack-7", category: "Tech", text: "Portable power bank & charging cables", packed: false },
+    { id: "pack-8", category: "Tech", text: "Universal travel plug adapter", packed: false },
+    { id: "pack-9", category: "Toiletries", text: "Toothbrush, toothpaste & travel kit", packed: false },
+    { id: "pack-10", category: "Toiletries", text: "Prescription medications & basic first-aid", packed: false },
+    { id: "pack-11", category: "Documents", text: "Flight & lodging confirmation printouts/PDFs", packed: false },
+  ];
+}
+
+function calculateSunTimes(latitude?: number, longitude?: number, dateStr?: string): { sunrise: string; sunset: string; goldenHour: string } | null {
+  if (typeof latitude !== "number" || typeof longitude !== "number" || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+  const date = dateStr ? new Date(`${dateStr}T12:00:00Z`) : new Date();
+  const startOfYear = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const dayOfYear = Math.floor((date.getTime() - startOfYear.getTime()) / 86400000);
+  
+  const declination = 23.45 * Math.sin(((360 / 365) * (dayOfYear - 81) * Math.PI) / 180);
+  const latRad = (latitude * Math.PI) / 180;
+  const decRad = (declination * Math.PI) / 180;
+  
+  const cosHourAngle = -Math.tan(latRad) * Math.tan(decRad);
+  const clampedCos = Math.max(-1, Math.min(1, cosHourAngle));
+  const hourAngle = (Math.acos(clampedCos) * 180) / Math.PI;
+  
+  const solarNoon = 12 - (longitude / 15);
+  const sunriseHour = (solarNoon - (hourAngle / 15) + 24) % 24;
+  const sunsetHour = (solarNoon + (hourAngle / 15) + 24) % 24;
+  const goldenHourStart = (sunsetHour - 1 + 24) % 24;
+  
+  const formatHour = (h: number) => {
+    const hours = Math.floor(h);
+    const mins = Math.floor((h - hours) * 60);
+    const suffix = hours >= 12 ? "PM" : "AM";
+    const displayH = hours % 12 || 12;
+    return `${displayH}:${String(mins).padStart(2, "0")} ${suffix}`;
+  };
+  
+  return {
+    sunrise: formatHour(sunriseHour),
+    sunset: formatHour(sunsetHour),
+    goldenHour: `${formatHour(goldenHourStart)} - ${formatHour(sunsetHour)}`,
+  };
+}
 
 type WeatherDay = {
   day: string;
@@ -233,6 +297,11 @@ function timestampMillis(value: unknown): number {
   if (typeof value === "string") {
     const parsed = Date.parse(value);
     if (!Number.isNaN(parsed)) return parsed;
+  }
+  if (value && typeof value === "object") {
+    const timestamp = value as { toMillis?: () => number; seconds?: number };
+    if (typeof timestamp.toMillis === "function") return timestamp.toMillis();
+    if (typeof timestamp.seconds === "number") return timestamp.seconds * 1000;
   }
   return 0;
 }
@@ -683,6 +752,88 @@ export default function Home() {
   const [weatherError, setWeatherError] = useState("");
   const mapGeocodeAttemptsRef = useRef(new Set<string>());
   const lastMapGeocodeAtRef = useRef(0);
+
+  // Packing & Readiness State
+  const packingList = useMemo(() => {
+    return activeTrip?.packingList || defaultPackingItems();
+  }, [activeTrip?.packingList]);
+  const packedCount = useMemo(() => packingList.filter((p) => p.packed).length, [packingList]);
+  const packingPercent = packingList.length > 0 ? Math.round((packedCount / packingList.length) * 100) : 0;
+  const [newPackingCategory, setNewPackingCategory] = useState<PackingCategory>("Essentials");
+  const [newPackingText, setNewPackingText] = useState("");
+
+  // Currency Converter State
+  const [convertAmount, setConvertAmount] = useState(100);
+  const [convertFrom, setConvertFrom] = useState(() => activeTrip?.currency || "CHF");
+  const [convertTo, setConvertTo] = useState("USD");
+
+  // Emergency Info
+  const emergencyInfo = useMemo(() => {
+    return getEmergencyInfo(activeTrip?.countryCode || inferredCountryCode);
+  }, [activeTrip?.countryCode, inferredCountryCode]);
+
+  // Sun & Golden Hour Calculation
+  const sunTimes = useMemo(() => {
+    const lat = activeTrip?.mapPins?.[0]?.latitude ?? weatherForecast?.latitude;
+    const lon = activeTrip?.mapPins?.[0]?.longitude ?? weatherForecast?.longitude;
+    const currentDayObj = itineraryDays[activeDay];
+    const dateStr = currentDayObj?.isoDate || activeTrip?.startDate;
+    return calculateSunTimes(lat, lon, dateStr);
+  }, [activeTrip?.mapPins, weatherForecast?.latitude, weatherForecast?.longitude, itineraryDays, activeDay, activeTrip?.startDate]);
+
+  function togglePackingItem(itemId: string) {
+    updateActiveTrip((trip) => {
+      const currentList = trip.packingList || defaultPackingItems();
+      return {
+        ...trip,
+        packingList: currentList.map((item) =>
+          item.id === itemId ? { ...item, packed: !item.packed } : item,
+        ),
+      };
+    });
+  }
+
+  function addPackingItemSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!newPackingText.trim()) return;
+    updateActiveTrip((trip) => {
+      const currentList = trip.packingList || defaultPackingItems();
+      const newItem: PackingItem = {
+        id: `pack-${crypto.randomUUID()}`,
+        category: newPackingCategory,
+        text: newPackingText.trim(),
+        packed: false,
+      };
+      return {
+        ...trip,
+        packingList: [...currentList, newItem],
+      };
+    });
+    setNewPackingText("");
+  }
+
+  function deletePackingItem(itemId: string) {
+    updateActiveTrip((trip) => {
+      const currentList = trip.packingList || defaultPackingItems();
+      return {
+        ...trip,
+        packingList: currentList.filter((item) => item.id !== itemId),
+      };
+    });
+  }
+
+  // Global Escape key listener to dismiss open panels & modals
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        if (plannerOpen) setPlannerOpen(null);
+        if (authModalOpen) setAuthModalOpen(false);
+        if (notificationsOpen) setNotificationsOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [plannerOpen, authModalOpen, notificationsOpen]);
 
   // Auth Listener & Firestore Sync
   useEffect(() => {
@@ -2252,6 +2403,9 @@ export default function Home() {
             ["◇", "Map"],
             ["¤", "Expenses"],
             ["▣", "Wallet"],
+            ["✓", "Packing List"],
+            ["✚", "Emergency Hub"],
+            ["📄", "Travel Booklet"],
           ].map(([icon, label]) => (
             <button
               className={activeNav === label ? "nav-item active" : "nav-item"}
@@ -2266,6 +2420,7 @@ export default function Home() {
               {label}
               {label === "Wallet" && <small>{walletDocs.length}</small>}
               {label === "Guest Flights" && guestFlights.length > 0 && <small>{guestFlights.length}</small>}
+              {label === "Packing List" && <small>{packedCount}/{packingList.length}</small>}
             </button>
           ))}
         </nav>
@@ -2805,6 +2960,28 @@ export default function Home() {
                   <div className="weather-meta"><span>H {dynamicWeatherForecast.days[0]?.high || "—"}</span><span>L {dynamicWeatherForecast.days[0]?.low || "—"}</span><span>Precip. {dynamicWeatherForecast.days[0]?.rain || "—"}</span></div>
                 </button>
 
+                {sunTimes && (
+                  <div className="sun-tracker-card">
+                    <div className="rail-heading">
+                      <span>DAYLIGHT & GOLDEN HOUR</span>
+                    </div>
+                    <div className="sun-times-row">
+                      <div className="sun-time-item">
+                        <span>Sunrise</span>
+                        <strong>{sunTimes.sunrise}</strong>
+                      </div>
+                      <div className="sun-time-item">
+                        <span>Sunset</span>
+                        <strong>{sunTimes.sunset}</strong>
+                      </div>
+                      <div className="sun-time-item">
+                        <span>Golden Hour</span>
+                        <strong>{sunTimes.goldenHour}</strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <section className="expense-card">
                   <div className="rail-heading">
                     <span>GROUP EXPENSES</span>
@@ -2930,6 +3107,45 @@ export default function Home() {
               </div>
 
               <aside className="right-rail">
+                <section className="currency-converter-card">
+                  <h4>Quick Currency Converter</h4>
+                  <div className="currency-converter-inputs">
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={convertAmount}
+                      onChange={(e) => setConvertAmount(Number(e.target.value) || 0)}
+                      aria-label="Amount to convert"
+                    />
+                    <select
+                      value={convertFrom}
+                      onChange={(e) => setConvertFrom(e.target.value)}
+                      aria-label="From currency"
+                    >
+                      {Object.keys(COMMON_CURRENCIES).map((code) => (
+                        <option key={code} value={code}>{code}</option>
+                      ))}
+                    </select>
+                    <span className="currency-converter-arrow">→</span>
+                    <select
+                      value={convertTo}
+                      onChange={(e) => setConvertTo(e.target.value)}
+                      aria-label="To currency"
+                    >
+                      {Object.keys(COMMON_CURRENCIES).map((code) => (
+                        <option key={code} value={code}>{code}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ marginTop: "10px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <small style={{ color: "var(--muted)" }}>Converted:</small>
+                    <strong className="currency-converter-result">
+                      {formatCurrencyAmount(convertCurrency(convertAmount, convertFrom, convertTo), convertTo)}
+                    </strong>
+                  </div>
+                </section>
+
                 <section className="expense-card" style={{ background: "white" }}>
                   <div className="rail-heading"><span>BALANCE SUMMARY</span></div>
                   <strong className="expense-total">{tripCurrency} {totalExpenseAmount.toFixed(2)}</strong>
@@ -2982,6 +3198,240 @@ export default function Home() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {activeNav === "Packing List" && (
+            <div className="packing-container view-fade">
+              <div className="section-heading">
+                <div><span>TRIP READINESS</span><h2>Smart Packing Checklist</h2></div>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <button className="secondary-action" style={{ width: "auto" }} onClick={() => {
+                    updateActiveTrip((t) => ({ ...t, packingList: defaultPackingItems() }));
+                    notify("Reset packing checklist to defaults");
+                  }}>Reset Defaults</button>
+                </div>
+              </div>
+
+              <div className="packing-header-card">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong>Trip Readiness Progress</strong>
+                  <strong style={{ color: packingPercent === 100 ? "var(--success)" : "var(--navy)" }}>{packingPercent}% Packed</strong>
+                </div>
+                <div className="packing-progress-bar-bg" role="progressbar" aria-valuenow={packingPercent} aria-valuemin={0} aria-valuemax={100}>
+                  <div className="packing-progress-bar-fill" style={{ width: `${packingPercent}%` }} />
+                </div>
+                <div className="packing-progress-labels">
+                  <span>{packedCount} of {packingList.length} items packed</span>
+                  <span>{packingList.length - packedCount} items remaining</span>
+                </div>
+
+                {dynamicWeatherForecast?.days[0]?.rain && dynamicWeatherForecast.days[0].rain !== "0%" && (
+                  <div className="packing-weather-tip">
+                    <span>☂️</span>
+                    <div>
+                      <strong>Weather-Aware Tip for {dynamicWeatherForecast.destination}:</strong>
+                      <span> Precipitation probability is {dynamicWeatherForecast.days[0].rain}. Pack an umbrella or rain shell!</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="packing-categories-grid">
+                {(["Essentials", "Clothing", "Tech", "Toiletries", "Documents"] as PackingCategory[]).map((cat) => {
+                  const itemsInCat = packingList.filter((item) => item.category === cat);
+                  const catPacked = itemsInCat.filter((i) => i.packed).length;
+                  return (
+                    <div className="packing-category-card" key={cat}>
+                      <div className="packing-category-heading">
+                        <span>{cat}</span>
+                        <small>{catPacked}/{itemsInCat.length}</small>
+                      </div>
+                      <div className="packing-items-list">
+                        {itemsInCat.map((item) => (
+                          <div className={`packing-item-row ${item.packed ? "packed" : ""}`} key={item.id}>
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={item.packed}
+                                onChange={() => togglePackingItem(item.id)}
+                              />
+                              <span>{item.text}</span>
+                            </label>
+                            <button
+                              className="packing-item-delete"
+                              onClick={() => deletePackingItem(item.id)}
+                              title="Delete item"
+                              aria-label={`Delete ${item.text}`}
+                            >×</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="packing-category-card" style={{ maxWidth: "500px" }}>
+                <h4 style={{ margin: "0 0 8px", fontSize: "12px" }}>Add Custom Item</h4>
+                <form className="packing-add-form" onSubmit={addPackingItemSubmit}>
+                  <select
+                    value={newPackingCategory}
+                    onChange={(e) => setNewPackingCategory(e.target.value as PackingCategory)}
+                    aria-label="Packing item category"
+                  >
+                    <option value="Essentials">Essentials</option>
+                    <option value="Clothing">Clothing</option>
+                    <option value="Tech">Tech</option>
+                    <option value="Toiletries">Toiletries</option>
+                    <option value="Documents">Documents</option>
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="e.g., Hiking boots, Swimwear..."
+                    value={newPackingText}
+                    onChange={(e) => setNewPackingText(e.target.value)}
+                    aria-label="New packing item description"
+                  />
+                  <button type="submit">＋ Add</button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {activeNav === "Emergency Hub" && (
+            <div className="view-fade">
+              <div className="section-heading">
+                <div><span>SAFETY & ASSISTANCE</span><h2>Emergency & Local Services</h2></div>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <button className="primary-action" style={{ width: "auto" }} onClick={() => {
+                    navigator.clipboard.writeText(`Emergency in ${emergencyInfo.countryName}: General: ${emergencyInfo.general}, Police: ${emergencyInfo.police}, Medical: ${emergencyInfo.ambulance}`);
+                    notify("Copied emergency contacts to clipboard");
+                  }}>Copy Emergency Numbers</button>
+                </div>
+              </div>
+
+              <div className="emergency-hub-grid">
+                <div className="emergency-card">
+                  <span className="eyebrow">{emergencyInfo.countryName.toUpperCase()} · LOCAL DIALERS</span>
+                  <h3>Direct Emergency Lines</h3>
+                  <p style={{ fontSize: "11px", color: "var(--muted)", margin: "4px 0 12px" }}>
+                    Tap or dial these numbers directly while connected to local telecommunication networks.
+                  </p>
+
+                  <div className="emergency-numbers-row">
+                    <div className="emergency-number-box">
+                      <span>General</span>
+                      <strong>{emergencyInfo.general}</strong>
+                    </div>
+                    <div className="emergency-number-box">
+                      <span>Police</span>
+                      <strong>{emergencyInfo.police}</strong>
+                    </div>
+                    <div className="emergency-number-box">
+                      <span>Medical / SAMU</span>
+                      <strong>{emergencyInfo.ambulance}</strong>
+                    </div>
+                  </div>
+
+                  {emergencyInfo.notes && (
+                    <div style={{ background: "var(--cream)", padding: "10px 14px", borderRadius: "6px", fontSize: "11px", borderLeft: "3px solid var(--navy)" }}>
+                      <strong>Local Note: </strong>{emergencyInfo.notes}
+                    </div>
+                  )}
+
+                  {emergencyInfo.touristHelpline && (
+                    <div style={{ marginTop: "12px", fontSize: "11px" }}>
+                      <strong>Tourist Assistance Helpline: </strong>
+                      <span style={{ color: "var(--navy)", fontWeight: "bold" }}>{emergencyInfo.touristHelpline}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="emergency-card">
+                  <span className="eyebrow">{emergencyInfo.language.toUpperCase()} · ESSENTIAL PHRASES</span>
+                  <h3>Emergency Translation Cards</h3>
+                  <p style={{ fontSize: "11px", color: "var(--muted)", margin: "4px 0 12px" }}>
+                    Show or read these medical and assistance phrases when communicating locally.
+                  </p>
+
+                  <div className="emergency-phrases-list">
+                    {emergencyInfo.phrases.map((phrase, idx) => (
+                      <div className="emergency-phrase-item" key={idx}>
+                        <strong>{phrase.english}</strong>
+                        <em>{phrase.local}</em>
+                        {phrase.pronunciation && <small>Pronunciation: ({phrase.pronunciation})</small>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeNav === "Travel Booklet" && (
+            <div className="view-fade booklet-view">
+              <div className="section-heading">
+                <div><span>OFFLINE & PRINT</span><h2>Travel Companion Booklet</h2></div>
+                <div className="booklet-actions">
+                  <button className="primary-action" onClick={() => window.print()}>🖨️ Print / Save as PDF</button>
+                  <button className="secondary-action" onClick={() => {
+                    const text = `${tripName}\nRoute: ${tripRoute}\nDates: ${activeTrip?.startDate} to ${activeTrip?.endDate || "—"}\n\nDays:\n` +
+                      itineraryDays.map((d) => `Day ${d.date} (${d.label}):\n` + d.events.map((e) => `  ${e.time} - ${e.title} (${e.meta})`).join("\n")).join("\n\n");
+                    navigator.clipboard.writeText(text);
+                    notify("Copied travel booklet summary to clipboard");
+                  }}>📋 Copy Text Summary</button>
+                </div>
+              </div>
+
+              <div style={{ background: "white", padding: "24px", borderRadius: "var(--radius-card)", border: "1px solid var(--line)" }}>
+                <div style={{ borderBottom: "2px solid var(--navy)", paddingBottom: "12px", marginBottom: "20px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <h1 style={{ margin: "0 0 4px", fontSize: "20px" }}>{tripName}</h1>
+                    <p style={{ margin: 0, color: "var(--muted)", fontSize: "12px" }}>{tripRoute} · {activeTrip?.startDate} — {activeTrip?.endDate || "Ongoing"}</p>
+                  </div>
+                  <div style={{ textAlign: "right", fontSize: "11px", color: "var(--muted)" }}>
+                    <strong>{travelersList.length} Travelers</strong>
+                    <div>Emergency: {emergencyInfo.general}</div>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: "20px" }}>
+                  <h3 style={{ fontSize: "14px", borderBottom: "1px solid var(--line)", paddingBottom: "6px" }}>Daily Itinerary Schedule</h3>
+                  {itineraryDays.map((d) => (
+                    <div key={d.id} style={{ margin: "12px 0", paddingLeft: "12px", borderLeft: "3px solid var(--navy)" }}>
+                      <strong style={{ fontSize: "12px" }}>Day {d.date} · {d.short} — {d.label}</strong>
+                      <div style={{ marginTop: "6px" }}>
+                        {d.events.length === 0 ? (
+                          <small style={{ color: "var(--muted)" }}>Free day / no scheduled plans</small>
+                        ) : (
+                          d.events.map((e, i) => (
+                            <div key={i} style={{ fontSize: "11px", margin: "3px 0", display: "flex", gap: "10px" }}>
+                              <time style={{ width: "65px", color: "var(--muted)", fontWeight: "600" }}>{e.time}</time>
+                              <span><strong>{e.title}</strong> — {e.meta}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {walletDocs.length > 0 && (
+                  <div style={{ marginBottom: "20px" }}>
+                    <h3 style={{ fontSize: "14px", borderBottom: "1px solid var(--line)", paddingBottom: "6px" }}>Confirmation Passes & Booking Codes</h3>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px", marginTop: "10px" }}>
+                      {walletDocs.map((doc) => (
+                        <div key={doc.id} style={{ background: "var(--cream)", padding: "10px", borderRadius: "6px", border: "1px solid var(--line)", fontSize: "11px" }}>
+                          <strong>{doc.title}</strong>
+                          <div style={{ color: "var(--muted)", fontSize: "10px" }}>{doc.meta}</div>
+                          <div style={{ marginTop: "4px", fontFamily: "monospace", fontWeight: "bold" }}>Code: {doc.code}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

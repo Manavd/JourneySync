@@ -1,11 +1,11 @@
 # Graph Report - JourneySync  (2026-08-21)
 
 ## Corpus Check
-- 98 files · ~150,174 words
+- 96 files · ~147,324 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1048 nodes · 2475 edges · 94 communities (56 shown, 38 thin omitted)
+- 1032 nodes · 2445 edges · 93 communities (57 shown, 36 thin omitted)
 - Extraction: 98% EXTRACTED · 2% INFERRED · 0% AMBIGUOUS · INFERRED: 49 edges (avg confidence: 0.77)
 - Token cost: 0 input · 0 output
 
@@ -24,24 +24,24 @@
 - page.tsx
 - MainActivity.java
 - compilerOptions
-- firebase.ts
+- requireAuth
 - devDependencies
 - k
-- MapPin
 - Day
+- location-data.ts
 - dependencies
 - HomeLocation
 - layout.tsx
 - Whisper transcription with domain-hint prompt
 - generate-design-tokens.mjs
-- GroupChat.tsx
+- firebase.ts
 - scripts
 - Ae
 - m
 - D1Database
 - notes/route.ts
 - e
-- FlightInfo
+- .refreshLiveFlight
 - /graphify command (Codex)
 - Extraction subagent prompt
 - worker/index.ts
@@ -55,7 +55,7 @@
 - TripMap.tsx
 - /graphify command
 - GitHub clone and cross-repo merge
-- DayEvent
+- .updateClockViews
 - og.png (Open Graph Preview Image)
 - start.mjs
 - Approach Guidelines
@@ -63,14 +63,14 @@
 - graphify reference: extra exports and benchmark
 - F
 - DesignTokens
-- .collectExtras
+- .applyLiveFlight
 - vite.config.ts
 - Writer
-- Traveler
+- drizzle-kit
 - eslint.config.mjs
 - eslint-config-next
 - next.config.ts
-- WalletDoc
+- .isoFormat
 - @types/leaflet
 - @types/node
 - @types/react
@@ -90,26 +90,25 @@
 - /api/weather route
 - TripChat
 - ke
-- .parseList
+- TimeFormat
 - Q: Should low-cohesion communities be split into smaller modules?
 - Q: Why does Trip connect to Leaflet.js Minified Parser and Writer communities?
 - graphify reference: add a URL and watch a folder
 - graphify reference: commit hook and native CLAUDE.md integration
 - graphify reference: incremental update and cluster-only
-- .refreshLiveFlight
+- .recordRefreshFailure
 - graphify reference: GitHub clone and cross-repo merge
 - graphify reference: transcribe video and audio
 - extraction-spec.md
 - @vitejs/plugin-react
-- tailwindcss
 
 ## God Nodes (most connected - your core abstractions)
 1. `MainActivity` - 197 edges
 2. `Trip` - 71 edges
-3. `Home()` - 69 edges
+3. `Home()` - 61 edges
 4. `notify()` - 34 edges
 5. `requireSignIn()` - 31 edges
-6. `updateActiveTrip()` - 26 edges
+6. `updateActiveTrip()` - 23 edges
 7. `Day` - 18 edges
 8. `TripSyncTest` - 18 edges
 9. `JourneySync` - 17 edges
@@ -118,10 +117,10 @@
 ## Surprising Connections (you probably didn't know these)
 - `Steps 6b-8 - Wiki, Neo4j, FalkorDB, SVG, GraphML, MCP, benchmark` --semantically_similar_to--> `Extra exports and benchmark (Codex)`  [INFERRED] [semantically similar]
   .claude/skills/graphify/SKILL.md → .codex/skills/graphify/references/exports.md
-- `/graphify command (Codex)` --semantically_similar_to--> `/graphify command`  [INFERRED] [semantically similar]
-  .codex/skills/graphify/SKILL.md → .claude/skills/graphify/SKILL.md
 - `Extraction subagent prompt` --semantically_similar_to--> `Extraction subagent prompt (Codex, compact)`  [INFERRED] [semantically similar]
   .claude/skills/graphify/references/extraction-spec.md → .codex/skills/graphify/references/extraction-spec.md
+- `/graphify command (Codex)` --semantically_similar_to--> `/graphify command`  [INFERRED] [semantically similar]
+  .codex/skills/graphify/SKILL.md → .claude/skills/graphify/SKILL.md
 - `Whisper transcription with domain-hint prompt` --semantically_similar_to--> `Whisper transcription (Codex)`  [INFERRED] [semantically similar]
   .claude/skills/graphify/references/transcribe.md → .codex/skills/graphify/references/transcribe.md
 - `Known Token Gaps` --semantically_similar_to--> `Decisions Deferred`  [INFERRED] [semantically similar]
@@ -138,10 +137,10 @@
 - **Query/Path/Explain Interrogation Flows** — claude_skills_graphify_references_query_traversal, claude_skills_graphify_references_query_path, claude_skills_graphify_references_query_explain, claude_skills_graphify_references_query_save_result [INFERRED 0.85]
 - **Structural + Semantic Extraction Pipeline** — claude_skills_graphify_skill_step3_extract, claude_skills_graphify_skill_step3a_ast, claude_skills_graphify_skill_step3b_semantic, claude_skills_graphify_skill_step3c_merge [INFERRED 0.85]
 
-## Communities (94 total, 38 thin omitted)
+## Communities (93 total, 36 thin omitted)
 
 ### Community 0 - "MainActivity"
-Cohesion: 0.06
+Cohesion: 0.07
 Nodes (32): Activity, DayEvent, Expense, FlightInfo, GuestFlight, MapPin, Traveler, WalletDoc (+24 more)
 
 ### Community 1 - "status/route.ts"
@@ -153,40 +152,44 @@ Cohesion: 0.06
 Nodes (48): Leaflet BSD 2-Clause License, AeroDataBox Key Protection (Android), Shared Firestore Trip Document (Android), Debug Signing Key (gitignored), Firebase Authentication (Android), Live Flight Refresh (Android), JourneySync Android (overview), com.manavdesai.journeysync package (+40 more)
 
 ### Community 3 - "Home"
-Cohesion: 0.13
-Nodes (43): getIdToken(), defaultPackingItems(), formatTime(), friendlyFlightError(), Home(), addDay(), addExpenseSubmit(), addItem() (+35 more)
-
-### Community 4 - "TripSyncTest"
-Cohesion: 0.07
-Nodes (5): TimeFormat, TripSyncTest, java.text.SimpleDateFormat, org.junit.Test, SimpleDateFormat
+Cohesion: 0.16
+Nodes (36): formatTime(), friendlyFlightError(), Home(), addDay(), addExpenseSubmit(), addItem(), addLiveSearchResult(), addMapPinSubmit() (+28 more)
 
 ### Community 5 - "leaflet.js"
 Cohesion: 0.07
 Nodes (7): a(), Ci(), ei(), ii(), l(), ri(), x()
 
 ### Community 6 - "page.tsx"
-Cohesion: 0.04
-Nodes (53): COMMON_CURRENCIES, convertCurrency(), CurrencyRate, formatCurrencyAmount(), CountryEmergencyInfo, EMERGENCY_DIRECTORY, getEmergencyInfo(), COMMON_CURRENCIES (+45 more)
+Cohesion: 0.06
+Nodes (37): deleteDoc(), activeTripStatus(), buildTripSummary(), Day, DayEvent, EMPTY_DAYS, EMPTY_EXPENSES, EMPTY_GUEST_FLIGHTS (+29 more)
 
 ### Community 7 - "MainActivity.java"
 Cohesion: 0.06
-Nodes (24): For /graphify explain, For /graphify path, graphify reference: query, path, explain, Step 0 — Constrained query expansion (REQUIRED before traversal), Step 1 — Traversal, android.app.AlertDialog, android.content.Intent, android.content.SharedPreferences (+16 more)
+Nodes (23): For /graphify explain, For /graphify path, graphify reference: query, path, explain, Step 0 — Constrained query expansion (REQUIRED before traversal), Step 1 — Traversal, android.app.AlertDialog, android.content.Intent, android.content.SharedPreferences (+15 more)
 
 ### Community 8 - "compilerOptions"
 Cohesion: 0.07
 Nodes (28): dom, dom.iterable, esnext, **/*.mts, .next/dev/types/**/*.ts, next-env.d.ts, .next/types/**/*.ts, node_modules (+20 more)
 
-### Community 9 - "firebase.ts"
-Cohesion: 0.16
-Nodes (18): auth, createUserWithEmailAndPassword(), deleteDoc(), deleteField(), firebaseConfig, googleProvider, invalidConfigKeys, onAuthStateChanged() (+10 more)
+### Community 9 - "requireAuth"
+Cohesion: 0.24
+Nodes (12): createUserWithEmailAndPassword(), getIdToken(), onAuthStateChanged(), requireAuth(), signInWithEmailAndPassword(), signInWithPopup(), signOut(), toUser() (+4 more)
 
 ### Community 10 - "devDependencies"
 Cohesion: 0.11
-Nodes (19): @cloudflare/vite-plugin, drizzle-kit, eslint, devDependencies, @cloudflare/vite-plugin, drizzle-kit, eslint, react-server-dom-webpack (+11 more)
+Nodes (19): @cloudflare/vite-plugin, eslint, devDependencies, @cloudflare/vite-plugin, eslint, react-server-dom-webpack, tailwindcss, @tailwindcss/postcss (+11 more)
 
 ### Community 11 - "k"
 Cohesion: 0.40
 Nodes (6): G(), k(), me(), Oe(), Se(), ze()
+
+### Community 12 - "Day"
+Cohesion: 0.05
+Nodes (10): Day, DayEvent, Expense, Day, MapPin, MapValues, Traveler, Parser (+2 more)
+
+### Community 13 - "location-data.ts"
+Cohesion: 0.24
+Nodes (10): COMMON_CURRENCIES, countryByCode(), currencyForCountry(), inferCountryCode(), regionByCode(), TRIP_COUNTRIES, TripCountry, TripRegion (+2 more)
 
 ### Community 14 - "dependencies"
 Cohesion: 0.15
@@ -208,9 +211,9 @@ Nodes (10): Whisper transcription with domain-hint prompt, God Nodes, Step 2.5 -
 Cohesion: 0.24
 Nodes (9): BANNER_LINES, cssFile(), javaFile(), lower(), outputs, repoRoot, tokensPath, upper() (+1 more)
 
-### Community 19 - "GroupChat.tsx"
-Cohesion: 0.16
-Nodes (26): addDoc(), collection(), db, limitToLast(), onQuerySnapshot(), orderBy(), query(), requireDb() (+18 more)
+### Community 19 - "firebase.ts"
+Cohesion: 0.12
+Nodes (32): addDoc(), auth, collection(), db, deleteField(), firebaseConfig, googleProvider, invalidConfigKeys (+24 more)
 
 ### Community 20 - "scripts"
 Cohesion: 0.20
@@ -254,7 +257,7 @@ Nodes (26): For /graphify add and --watch, For /graphify query, For the commit h
 
 ### Community 31 - "WorldClock.tsx"
 Cohesion: 0.24
-Nodes (16): doc(), onSnapshot(), serverTimestamp(), setDoc(), countryByCode(), ClockDestination, dateInZone(), differenceLabel() (+8 more)
+Nodes (15): doc(), onSnapshot(), serverTimestamp(), setDoc(), ClockDestination, dateInZone(), differenceLabel(), homeFromData() (+7 more)
 
 ### Community 32 - "Steps 6b-8 - Wiki, Neo4j, FalkorDB, SVG, GraphML, MCP, benchmark"
 Cohesion: 0.29
@@ -337,23 +340,23 @@ Cohesion: 0.50
 Nodes (3): For --cluster-only, For --update (incremental re-extraction), graphify reference: incremental update and cluster-only
 
 ## Knowledge Gaps
-- **227 isolated node(s):** `ChatTrip`, `TripChat`, `ChatMessage`, `metadataSignatures`, `TripMapPoint` (+222 more)
+- **221 isolated node(s):** `ChatTrip`, `TripChat`, `ChatMessage`, `metadataSignatures`, `TripMapPoint` (+216 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **38 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **36 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `MainActivity` connect `MainActivity` to `TripSyncTest`, `MainActivity.java`, `DayEvent`, `Day`, `HomeLocation`, `TripChat`, `.refreshLiveFlight`?**
-  _High betweenness centrality (0.072) - this node is a cross-community bridge._
-- **Why does `Trip` connect `MainActivity` to `TripSyncTest`, `GuestFlight`, `DayEvent`, `MapPin`, `Day`, `.collectExtras`, `.parseList`, `Traveler`, `Writer`, `WalletDoc`?**
-  _High betweenness centrality (0.019) - this node is a cross-community bridge._
-- **Why does `Home()` connect `Home` to `firebase.ts`, `page.tsx`, `WorldClock.tsx`?**
-  _High betweenness centrality (0.015) - this node is a cross-community bridge._
+- **Why does `MainActivity` connect `MainActivity` to `TripSyncTest`, `MainActivity.java`, `.updateClockViews`, `Day`, `HomeLocation`, `.applyLiveFlight`, `TripChat`, `.isoFormat`, `.recordRefreshFailure`, `.refreshLiveFlight`?**
+  _High betweenness centrality (0.085) - this node is a cross-community bridge._
+- **Why does `Trip` connect `MainActivity` to `GuestFlight`, `.updateClockViews`, `Day`, `Writer`, `.isoFormat`?**
+  _High betweenness centrality (0.038) - this node is a cross-community bridge._
+- **Why does `Home()` connect `Home` to `page.tsx`, `requireAuth`, `location-data.ts`, `firebase.ts`, `WorldClock.tsx`?**
+  _High betweenness centrality (0.017) - this node is a cross-community bridge._
 - **What connects `ChatTrip`, `TripChat`, `ChatMessage` to the rest of the system?**
-  _227 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _221 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `MainActivity` be split into smaller, more focused modules?**
-  _Cohesion score 0.06151209293467911 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06658112346735101 - nodes in this community are weakly interconnected._
 - **Should `status/route.ts` be split into smaller, more focused modules?**
   _Cohesion score 0.06299603174603174 - nodes in this community are weakly interconnected._
 - **Should `JourneySync` be split into smaller, more focused modules?**
